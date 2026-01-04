@@ -4,6 +4,7 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::iter::FromIterator;
+use std::ops::{Index, IndexMut};
 
 // Use 'hashbrown' directly for the Raw Entry API (allows preventing double-hashing during spill)
 use hashbrown::HashMap;
@@ -47,8 +48,7 @@ union MapData<K, V, const N: usize> {
 
 impl<K, V, const N: usize> SmallMap<K, V, N>
 where
-    K: Eq + Hash + Debug, // Debug bound required for unwrap/expect
-    V: Debug,             // Debug bound required for unwrap/expect
+    K: Eq + Hash,
 {
     /// The maximum allowed stack size in bytes (16 KB).
     ///
@@ -145,14 +145,19 @@ where
                         // Fall through to Heap Logic below...
                     } else {
                         // Map is full, but we are updating an existing key. Safe to proceed on stack.
-                        return stack_map.insert(key, value).unwrap();
-                        // .expect("Logic Error: Key was found, so update should succeed");
+                        return match stack_map.insert(key, value) {
+                            Ok(old_val) => old_val,
+                            Err(_) => unreachable!("Logic Error: Key exists, update must succeed"),
+                        };
                     }
                 } else {
                     // Map is not full. Safe to insert.
-                    return stack_map
-                        .insert(key, value)
-                        .expect("Logic Error: Map not full, insert should succeed");
+                    return match stack_map.insert(key, value) {
+                        Ok(old_val) => old_val,
+                        Err(_) => {
+                            unreachable!("Logic Error: Capacity available, insert must succeed")
+                        }
+                    };
                 }
             }
 
@@ -304,12 +309,75 @@ where
     }
 }
 
+/// Allows read access using `map[&key]`.
+///
+/// # Panics
+/// Panics if the key is not present in the map.
+impl<K, V, Q, const N: usize> Index<&Q> for SmallMap<K, V, N>
+where
+    K: Eq + Hash + Borrow<Q>,
+    Q: Eq + Hash + ?Sized,
+{
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        self.get(key).expect("no entry found for key")
+    }
+}
+
+/// Allows mutable access using `map[&key] = new_value`.
+///
+/// # Panics
+/// Panics if the key is not present in the map.
+impl<K, V, Q, const N: usize> IndexMut<&Q> for SmallMap<K, V, N>
+where
+    K: Eq + Hash + Borrow<Q>,
+    Q: Eq + Hash + ?Sized,
+{
+    fn index_mut(&mut self, key: &Q) -> &mut Self::Output {
+        self.get_mut(key).expect("no entry found for key")
+    }
+}
+
+// Add this to src/map.rs
+
+// Manual implementation of Clone.
+// We must check `on_stack` to know which field to clone.
+impl<K, V, const N: usize> Clone for SmallMap<K, V, N>
+where
+    K: Eq + Hash + Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        unsafe {
+            if self.on_stack {
+                // Clone the Stack Map
+                let stack_clone = (*self.data.stack).clone();
+                SmallMap {
+                    on_stack: true,
+                    data: MapData {
+                        stack: ManuallyDrop::new(stack_clone),
+                    },
+                }
+            } else {
+                // Clone the Heap Map
+                let heap_clone = (*self.data.heap).clone();
+                SmallMap {
+                    on_stack: false,
+                    data: MapData {
+                        heap: ManuallyDrop::new(heap_clone),
+                    },
+                }
+            }
+        }
+    }
+}
+
 // --- 2. Entry API Support ---
 
 impl<K, V, const N: usize> SmallMap<K, V, N>
 where
-    K: Eq + Hash + Debug, // Debug bound required for unwrap/expect
-    V: Debug,
+    K: Eq + Hash,
 {
     /// Gets the given key's corresponding entry in the map for in-place manipulation.
     pub fn entry(&mut self, key: K) -> SmallMapEntry<'_, K, V, N> {
@@ -347,22 +415,32 @@ pub enum SmallMapEntry<'a, K, V, const N: usize> {
 impl<'a, K, V, const N: usize> SmallMapEntry<'a, K, V, N>
 where
     K: Eq + Hash,
-    V: Debug, // Debug bound required for unwrap/expect
 {
     pub fn or_insert(self, default: V) -> &'a mut V {
         match self {
             // We use expect() because SmallMap::entry() guarantees capacity
             // exists if it returns a Stack variant.
-            SmallMapEntry::Stack(e) => e.or_insert(default).expect("Stack map should have space"),
+            SmallMapEntry::Stack(e) => {
+                // We handle the Result manually to avoid `unwrap()`/`expect()`.
+                // This removes the need for V: Debug.
+                match e.or_insert(default) {
+                    Ok(v) => v,
+                    // We ignore the error payload (_) so we don't need to print it.
+                    Err(_) => {
+                        unreachable!("Logic Error: Stack map capacity check failed in entry()")
+                    }
+                }
+            }
             SmallMapEntry::Heap(e) => e.or_insert(default),
         }
     }
 
     pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
         match self {
-            SmallMapEntry::Stack(e) => e
-                .or_insert_with(default)
-                .expect("Stack map should have space"),
+            SmallMapEntry::Stack(e) => match e.or_insert_with(default) {
+                Ok(v) => v,
+                Err(_) => unreachable!("Logic Error: Stack map capacity check failed in entry()"),
+            },
             SmallMapEntry::Heap(e) => e.or_insert_with(default),
         }
     }
@@ -433,7 +511,7 @@ impl<K, V, const N: usize> Drop for SmallMap<K, V, N> {
 }
 
 // Default (Allows SmallMap::default())
-impl<K: Eq + Hash + Debug, V: Debug, const N: usize> Default for SmallMap<K, V, N> {
+impl<K: Eq + Hash, V, const N: usize> Default for SmallMap<K, V, N> {
     fn default() -> Self {
         Self::new()
     }
@@ -450,8 +528,7 @@ impl<K: Debug + Eq + Hash, V: Debug, const N: usize> Debug for SmallMap<K, V, N>
 // FromIterator (Allows .collect())
 impl<K, V, const N: usize> FromIterator<(K, V)> for SmallMap<K, V, N>
 where
-    K: Eq + Hash + Debug,
-    V: Debug,
+    K: Eq + Hash,
 {
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         let mut map = SmallMap::new();
@@ -463,7 +540,7 @@ where
 }
 
 // IntoIterator (Allows 'for (k,v) in map')
-impl<K: Eq + Hash + Debug, V: Debug, const N: usize> IntoIterator for SmallMap<K, V, N> {
+impl<K: Eq + Hash, V, const N: usize> IntoIterator for SmallMap<K, V, N> {
     type Item = (K, V);
     type IntoIter = SmallMapIntoIter<K, V, N>;
 
@@ -697,11 +774,70 @@ mod tests {
         // 2. Medium Map (Pushing the limit but safe)
         // Struct = 100 bytes. N = 64. Total ~6.4 KB.
         // This is < 16 KB, so it must compile and run.
-        #[derive(Debug)]
         #[allow(dead_code)]
         struct MediumStruct([u8; 100]);
 
         // We verify that this instantiation does NOT panic/fail to build.
         let _medium: SmallMap<i32, MediumStruct, 32> = SmallMap::new();
+    }
+
+    #[test]
+    fn test_index_read() {
+        let mut map: SmallMap<i32, i32, 4> = SmallMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+
+        // Read using Index syntax
+        assert_eq!(map[&1], 10);
+        assert_eq!(map[&2], 20);
+    }
+
+    #[test]
+    fn test_index_assign() {
+        let mut map: SmallMap<&str, i32, 4> = SmallMap::new();
+        map.insert("A", 10);
+
+        // Modify existing value using IndexMut syntax
+        map[&"A"] = 999;
+
+        assert_eq!(map.get("A"), Some(&999));
+        assert_eq!(map[&"A"], 999);
+    }
+
+    #[test]
+    fn test_index_borrowing() {
+        // Demonstrate using &str to index a Map<String, _>
+        let mut map: SmallMap<String, i32, 4> = SmallMap::new();
+        map.insert("Apple".to_string(), 100);
+
+        // We can use string literal "Apple" directly
+        assert_eq!(map["Apple"], 100);
+
+        // Mutate
+        map["Apple"] = 200;
+        assert_eq!(map["Apple"], 200);
+    }
+
+    #[test]
+    #[should_panic(expected = "no entry found for key")]
+    fn test_index_panic_on_missing() {
+        let map: SmallMap<i32, i32, 4> = SmallMap::new();
+        // This should panic
+        let _val = map[&999];
+    }
+
+    #[test]
+    fn test_map_clone() {
+        let mut map: SmallMap<String, i32, 4> = SmallMap::new();
+        map.insert("A".to_string(), 1);
+
+        // This requires the impl Clone above
+        let mut clone = map.clone();
+        clone.insert("B".to_string(), 2);
+
+        // Verify independence
+        assert_eq!(map.len(), 1);
+        assert_eq!(clone.len(), 2);
+        assert_eq!(clone.get("A"), Some(&1));
     }
 }

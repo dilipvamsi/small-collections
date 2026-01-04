@@ -116,25 +116,6 @@ If you see an error like *"SmallMap is too large"*, you have two options:
 | **Embedded / WASM** | **1 KB - 2 KB**. Stack is often very tight (e.g., 32KB total). |
 | **Heavy Async/Web Servers** | **4 KB**. Prevents bloated Future states eating RAM. |
 
-### 3. Trait Requirements (`Debug`)
-Because `SmallMap` relies on `heapless::IndexMap` for stack storage, operations like `insert` and `Entry::or_insert` return a `Result` containing the Key/Value on failure (e.g., `Err((K, V))`).
-
-To safely unwrap these results (asserting that capacity is available), **both `K` and `V` must implement `std::fmt::Debug`**.
-
-*   **Required for:** `insert`, `entry`, `or_insert`, `and_modify`.
-*   **Reason:** The compiler requires `Debug` to generate panic messages if an internal logic error (like a failed insertion into a non-full map) occurs.
-
-```rust
-// ❌ FAILS (MyStruct doesn't implement Debug)
-// struct MyStruct;
-// map.entry(1).or_insert(MyStruct);
-
-// ✅ WORKS
-// #[derive(Debug)]
-// struct MyStruct;
-// map.entry(1).or_insert(MyStruct);
-```
-
 ## ⚡ Performance Architecture
 
 This library is designed for scenarios with a **bimodal distribution of sizes**—where most collections are small, but some can grow large.
