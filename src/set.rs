@@ -16,8 +16,15 @@ use std::iter::FromIterator;
 pub trait AnySet<T> {
     /// Returns `true` if the collection contains the value.
     fn contains(&self, value: &T) -> bool;
-}
 
+    /// Returns the number of elements in the collection.
+    fn len(&self) -> usize;
+
+    /// Returns `true` if the collection is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 // Support SmallSet
 impl<T, const N: usize> AnySet<T> for SmallSet<T, N>
 where
@@ -25,6 +32,10 @@ where
 {
     fn contains(&self, value: &T) -> bool {
         SmallSet::contains(self, value)
+    }
+
+    fn len(&self) -> usize {
+        SmallSet::len(&self)
     }
 }
 
@@ -37,6 +48,10 @@ where
     fn contains(&self, value: &T) -> bool {
         self.contains(value)
     }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
 }
 
 // Support standard BTreeSet
@@ -46,6 +61,10 @@ where
 {
     fn contains(&self, value: &T) -> bool {
         self.contains(value)
+    }
+
+    fn len(&self) -> usize {
+        self.len()
     }
 }
 
@@ -326,20 +345,30 @@ where
     }
 }
 
-impl<T, const N: usize> PartialEq for SmallSet<T, N>
+// --- Equality (PartialEq / Eq) ---
+
+// Allows comparing SmallSets with AnySet.
+// 1. SmallSet<T, 4> == SmallSet<T, 8>
+// 2. SmallSet<T, 4> == HashSet<T>
+// 3. SmallSet<T, 4> == BTreeSet<T>
+impl<T, const N: usize, S> PartialEq<S> for SmallSet<T, N>
 where
     T: Eq + Hash + Clone,
+    S: AnySet<T>, // S is the target set (SmallSet, HashSet, etc.)
 {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &S) -> bool {
+        // Optimization: Sets of different sizes cannot be equal.
         if self.len() != other.len() {
             return false;
         }
-        // We can just check subset, because if lengths are equal
-        // and A is a subset of B, then A must equal B.
+
+        // Logic: If lengths are equal and A is a subset of B, then A == B.
+        // We rely on the `is_subset` method which uses `AnySet`.
         self.is_subset(other)
     }
 }
 
+// Eq implies PartialEq<Self>, which is covered by the implementation above where M = N.
 impl<T, const N: usize> Eq for SmallSet<T, N> where T: Eq + Hash + Clone {}
 
 // ==================================================================================
@@ -626,7 +655,7 @@ mod tests {
     fn test_equality() {
         let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![3, 2, 1].into_iter().collect(); // Different insertion order
-        let c: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
+        let c: SmallSet<i32, 2> = vec![1, 2].into_iter().collect();
 
         assert_eq!(a, b); // Should be equal despite order
         assert_ne!(a, c);
@@ -681,5 +710,57 @@ mod tests {
         assert!(!copy.contains("A"));
         assert!(copy.contains("C"));
         assert_eq!(copy.len(), 2);
+    }
+
+    #[test]
+    fn test_equality_different_capacities() {
+        let mut s1: SmallSet<i32, 4> = SmallSet::new();
+        let mut s2: SmallSet<i32, 8> = SmallSet::new();
+
+        s1.insert(1);
+        s1.insert(2);
+
+        s2.insert(2);
+        s2.insert(1);
+
+        // 1. Equal content, different capacity types
+        assert_eq!(s1, s2);
+
+        // 2. Different content
+        s2.insert(3);
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn test_equality_interop() {
+        let mut small: SmallSet<i32, 4> = SmallSet::new();
+        small.insert(1);
+        small.insert(2);
+
+        // 1. Check against HashSet
+        let mut hash_set = HashSet::new();
+        hash_set.insert(1);
+        hash_set.insert(2);
+
+        assert_eq!(small, hash_set); // SmallSet == HashSet
+
+        hash_set.insert(3);
+        assert_ne!(small, hash_set); // Lengths differ
+
+        // 2. Check against BTreeSet
+        let mut btree_set = BTreeSet::new();
+        btree_set.insert(1);
+        btree_set.insert(2);
+
+        assert_eq!(small, btree_set); // SmallSet == BTreeSet
+    }
+
+    #[test]
+    fn test_equality_cross_capacity() {
+        // Check SmallSet<4> == SmallSet<8>
+        let s1: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        let s2: SmallSet<i32, 8> = vec![3, 2, 1].into_iter().collect();
+
+        assert_eq!(s1, s2);
     }
 }
