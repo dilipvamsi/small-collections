@@ -21,7 +21,7 @@ pub trait AnySet<T> {
 // Support SmallSet
 impl<T, const N: usize> AnySet<T> for SmallSet<T, N>
 where
-    T: Eq + Hash + Debug,
+    T: Eq + Hash,
 {
     fn contains(&self, value: &T) -> bool {
         SmallSet::contains(self, value)
@@ -68,7 +68,7 @@ pub struct SmallSet<T, const N: usize> {
 
 impl<T, const N: usize> SmallSet<T, N>
 where
-    T: Eq + Hash + Debug,
+    T: Eq + Hash,
 {
     /// Creates a new empty set.
     ///
@@ -227,13 +227,34 @@ where
     {
         other.into_iter().all(|v| self.contains(v))
     }
+
+    /// Visits the values representing the symmetric difference,
+    /// i.e., values that are in `self` or `other` but not in both.
+    pub fn symmetric_difference<'a>(
+        &'a self,
+        other: &'a SmallSet<T, N>,
+    ) -> impl Iterator<Item = &'a T> {
+        // A ^ B = (A - B) U (B - A)
+        self.difference(other).chain(other.difference(self))
+    }
 }
 
 // ==================================================================================
 // 3. Trait Implementations
 // ==================================================================================
 
-impl<T: Eq + Hash + Debug, const N: usize> Default for SmallSet<T, N> {
+impl<T, const N: usize> Clone for SmallSet<T, N>
+where
+    T: Eq + Hash + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+        }
+    }
+}
+
+impl<T: Eq + Hash, const N: usize> Default for SmallSet<T, N> {
     fn default() -> Self {
         Self::new()
     }
@@ -246,18 +267,18 @@ impl<T: Debug + Eq + Hash, const N: usize> Debug for SmallSet<T, N> {
 }
 
 // Allows `set.iter().collect()` or `vec.into_iter().collect()`
-impl<T: Eq + Hash + Debug, const N: usize> FromIterator<T> for SmallSet<T, N> {
+impl<T: Eq + Hash, const N: usize> FromIterator<T> for SmallSet<T, N> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut set = SmallSet::new();
-        for i in iter {
-            set.insert(i);
+        for val in iter {
+            set.insert(val);
         }
         set
     }
 }
 
 // Allows `for x in set` (Consuming Iterator)
-impl<T: Eq + Hash + Debug, const N: usize> IntoIterator for SmallSet<T, N> {
+impl<T: Eq + Hash, const N: usize> IntoIterator for SmallSet<T, N> {
     type Item = T;
     type IntoIter = SmallSetIntoIter<T, N>;
 
@@ -282,6 +303,45 @@ impl<T, const N: usize> Iterator for SmallSetIntoIter<T, N> {
     }
 }
 
+impl<T, const N: usize> Extend<T> for SmallSet<T, N>
+where
+    T: Eq + Hash + Clone,
+{
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for item in iter {
+            self.insert(item);
+        }
+    }
+}
+
+// Allows extending with references: set.extend(&vec)
+impl<'a, T, const N: usize> Extend<&'a T> for SmallSet<T, N>
+where
+    T: 'a + Eq + Hash + Clone + Copy,
+{
+    fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
+        for item in iter {
+            self.insert(*item);
+        }
+    }
+}
+
+impl<T, const N: usize> PartialEq for SmallSet<T, N>
+where
+    T: Eq + Hash + Clone,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        // We can just check subset, because if lengths are equal
+        // and A is a subset of B, then A must equal B.
+        self.is_subset(other)
+    }
+}
+
+impl<T, const N: usize> Eq for SmallSet<T, N> where T: Eq + Hash + Clone {}
+
 // ==================================================================================
 // 4. Reference Iterator Support
 // ==================================================================================
@@ -304,7 +364,7 @@ impl<'a, T> Iterator for SetRefIter<'a, T> {
 // Allows `for x in &set` or passing `&set` to methods like `union`
 impl<'a, T, const N: usize> IntoIterator for &'a SmallSet<T, N>
 where
-    T: Eq + Hash + Debug,
+    T: Eq + Hash,
 {
     type Item = &'a T;
     type IntoIter = SetRefIter<'a, T>;
@@ -547,5 +607,79 @@ mod tests {
         assert!(set.contains(&2));
         assert!(set.contains(&4));
         assert!(!set.contains(&1));
+    }
+
+    #[test]
+    fn test_symmetric_difference() {
+        let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        let b: SmallSet<i32, 4> = vec![3, 4, 5].into_iter().collect();
+
+        // Items in A or B, but not both: {1, 2, 4, 5}
+        let sym: Vec<_> = a.symmetric_difference(&b).cloned().collect();
+        assert_eq!(sym.len(), 4);
+        assert!(sym.contains(&1));
+        assert!(sym.contains(&4));
+        assert!(!sym.contains(&3)); // 3 is in both
+    }
+
+    #[test]
+    fn test_equality() {
+        let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        let b: SmallSet<i32, 4> = vec![3, 2, 1].into_iter().collect(); // Different insertion order
+        let c: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
+
+        assert_eq!(a, b); // Should be equal despite order
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut set: SmallSet<i32, 4> = SmallSet::new();
+        set.insert(1);
+
+        let more = vec![2, 3, 4, 5]; // Triggers spill
+        set.extend(more);
+
+        assert_eq!(set.len(), 5);
+        assert!(!set.is_on_stack());
+        assert!(set.contains(&5));
+    }
+
+    #[test]
+    fn test_clone() {
+        let mut a: SmallSet<i32, 4> = SmallSet::new();
+        a.insert(1);
+
+        let mut b = a.clone();
+        b.insert(2);
+
+        assert!(a.contains(&1));
+        assert!(!a.contains(&2)); // A should be unaffected
+        assert!(b.contains(&1));
+        assert!(b.contains(&2));
+    }
+
+    #[test]
+    fn test_set_clone() {
+        let mut original: SmallSet<String, 4> = SmallSet::new();
+        original.insert("A".to_string());
+        original.insert("B".to_string());
+
+        // Clone the set
+        let mut copy = original.clone();
+
+        // Modify the copy
+        copy.insert("C".to_string());
+        copy.remove("A");
+
+        // Verify Original is untouched
+        assert!(original.contains("A"));
+        assert!(!original.contains("C"));
+        assert_eq!(original.len(), 2);
+
+        // Verify Copy is modified
+        assert!(!copy.contains("A"));
+        assert!(copy.contains("C"));
+        assert_eq!(copy.len(), 2);
     }
 }
