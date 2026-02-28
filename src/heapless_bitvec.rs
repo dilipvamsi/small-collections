@@ -23,6 +23,30 @@ use crate::bitvec::AnyBitVec;
 /// Bits are stored as packed `u8` bytes.  Individual bit access uses manual
 /// shift/mask arithmetic rather than a full `BitVec` view to avoid the overhead
 /// of slice pointer metadata on the stack.
+///
+/// # Pseudo-code Implementation
+/// `HeaplessBitVec` packs bits into a `u8` vector.
+///
+/// ```text
+/// // 1. Push (push)
+/// if bit_len % 8 == 0:
+///     if bytes.push(0) is full: return Err
+/// if val is true:
+///     bytes[bit_len / 8] |= mask(bit_len % 8)
+/// bit_len += 1
+///
+/// // 2. Pop (pop)
+/// if bit_len == 0: return None
+/// bit_len -= 1
+/// val = (bytes[bit_len / 8] & mask(bit_len % 8)) != 0
+/// if bit_len % 8 == 0:
+///     bytes.pop()
+/// return val
+///
+/// // 3. Get (get)
+/// byte = bytes[index / 8]
+/// return (byte & mask(index % 8)) != 0
+/// ```
 #[derive(Debug)]
 pub struct HeaplessBitVec<const N: usize, O: BitOrder = Lsb0> {
     bytes: HVec<u8, N>,

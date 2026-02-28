@@ -76,6 +76,31 @@ impl<K: Ord, V> Ord for Entry<K, V> {
 ///   the key (e.g. `&str` for `String` keys) via the standard `Borrow` trait.
 /// - **Sorted-vec vs hash**: sorted-vec was chosen because `BTreeMap` semantics require
 ///   sorted iteration.  A hash-based approach would break `IntoIterator` order guarantees.
+///
+/// # Pseudo-code Implementation
+/// `HeaplessBTreeMap` maintains a sorted array of `(Key, Value)` entries.
+///
+/// ```text
+/// // 1. Lookup (get)
+/// idx = binary_search(key) // O(log N)
+/// if idx: return values[idx]
+///
+/// // 2. Insertion (insert)
+/// idx = binary_search(key)
+/// if idx:
+///     update values[idx]; return old
+/// else:
+///     if len == N: return Err (Full)
+///     shift_right(idx..len) // O(N)
+///     insert (key, value) at idx
+///
+/// // 3. Removal (remove)
+/// idx = binary_search(key)
+/// if idx:
+///     val = values[idx]
+///     shift_left(idx+1..len) // O(N)
+///     return val
+/// ```
 #[derive(Debug, Clone)]
 pub struct HeaplessBTreeMap<K, V, const N: usize> {
     buf: HeaplessVec<Entry<K, V>, N>,

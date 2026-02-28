@@ -17,12 +17,31 @@
 
 `small_collections` is modular. You can enable or disable groups of collections to minimize dependency overhead:
 
-| Feature       | Collections Enabled                                        | Dependencies |
-| :------------ | :--------------------------------------------------------- | :----------- |
-| **`full`**    | All collections (Default)                                  | All          |
-| **`lru`**     | `SmallLruCache`, `HeaplessLruCache`                        | `lru`        |
-| **`ordered`** | `SmallOrderedMap`, `SmallOrderedSet`, `HeaplessOrderedMap` | `ordermap`   |
-| **`bitvec`**  | `SmallBitVec`, `HeaplessBitVec`                            | `bitvec`     |
+| Feature       | Collections Enabled                                                                    | Dependencies |
+| :------------ | :------------------------------------------------------------------------------------- | :----------- |
+| **`full`**    | All collections (Default)                                                              | All          |
+| **`lru`**     | `SmallLruCache`, `HeaplessLruCache`, `HeaplessBTreeLruCache`, `HeaplessLinearLruCache` | `lru`        |
+| **`ordered`** | `SmallOrderedMap`, `SmallOrderedSet`, `HeaplessOrderedMap`                             | `ordermap`   |
+| **`bitvec`**  | `SmallBitVec`, `HeaplessBitVec`                                                        | `bitvec`     |
+
+### Heapless LRU Variants
+
+For `SmallLruCache`, there are three heapless backends optimized for different capacity ranges:
+
+| Collection                   | Description                                                   | Access      |
+| :--------------------------- | :------------------------------------------------------------ | :---------- |
+| **`HeaplessLruCache`**       | Map-based LRU for high capacities.                            | $O(1)$      |
+| **`HeaplessBTreeLruCache`**  | Binary-search LRU for medium capacities ($32 \le N \le 128$). | $O(\log N)$ |
+| **`HeaplessLinearLruCache`** | Linear-scan LRU for ultra-small capacities ($N < 32$).        | $O(N)$      |
+
+## Benchmarks: Which LRU to use?
+
+| Capacity ($N$)       | Best for Writes    | Best for Reads  |
+| :------------------- | :----------------- | :-------------- |
+| **$N \le 16$**       | `Linear`           | `Linear`        |
+| **$16 < N \le 64$**  | `Linear` / `BTree` | `BTree`         |
+| **$64 < N \le 128$** | `BTree`            | `BTree` / `Map` |
+| **$N > 128$**        | `Map`              | `Map`           |
 
 Basic collections (`SmallVec`, `SmallDeque`, `SmallMap`, `SmallBTreeMap`, `SmallString`) are always available as they depend only on `heapless` and `fnv`.
 
@@ -96,11 +115,12 @@ om.insert(1, "Hello"); // Preserves order as [2, 1]
 
 ### 3. Specialized Collections
 
-| Type                  | Backend      | Use Case                                                           |
-| :-------------------- | :----------- | :----------------------------------------------------------------- |
-| **`SmallBinaryHeap`** | `BinaryHeap` | Priority queue. Efficiently find the maximum (or minimum) element. |
-| **`SmallLruCache`**   | `LruCache`   | Fixed-size cache that evicts the "Least Recently Used" items.      |
-| **`SmallBitVec`**     | `BitVec`     | Compact storage for booleans (1 bit per val).                      |
+| Type                         | Backend      | Use Case                                                           |
+| :--------------------------- | :----------- | :----------------------------------------------------------------- |
+| **`SmallBinaryHeap`**        | `BinaryHeap` | Priority queue. Efficiently find the maximum (or minimum) element. |
+| **`SmallLruCache`**          | `LruCache`   | Fixed-size cache that evicts the "Least Recently Used" items.      |
+| **`HeaplessLinearLruCache`** | None (Stack) | **Ultra-fast** linear-scan LRU for tiny capacities ($N < 32$).     |
+| **`SmallBitVec`**            | `BitVec`     | Compact storage for booleans (1 bit per val).                      |
 
 ```rust
 use small_collections::{SmallBinaryHeap, SmallLruCache, SmallBitVec};
@@ -112,7 +132,7 @@ heap.push(10);
 heap.push(20);
 assert_eq!(heap.pop(), Some(20)); // Highest priority first
 
-// LRU Cache
+// LRU Cache (Defaults to BTree backend)
 let mut cache: SmallLruCache<i32, i32, 8> = SmallLruCache::new(NonZeroUsize::new(2).unwrap());
 cache.put(1, 10);
 cache.put(2, 20);
@@ -196,8 +216,8 @@ Measured using `Criterion` on very small workloads to show the base gain over he
 | **`SmallMap`**        | Get 8       | 89.67 ns          | 41.51 ns               | **2.16x faster** |
 | **`SmallString`**     | Push 16     | 17.58 ns          | 7.87 ns                | **2.23x faster** |
 | **`SmallString`**     | Get (index) | 560.6 ps          | 523.7 ps               | **Competitive**  |
-| **`SmallLruCache`**   | Put 8       | 254.29 ns         | 115.24 ns              | **2.21x faster** |
-| **`SmallLruCache`**   | Get 8       | 45.24 ns          | 49.23 ns               | **Comparable**   |
+| **`SmallLruCache`**   | Put 8       | 242.88 ns         | 118.65 ns              | **2.05x faster** |
+| **`SmallLruCache`**   | Get 8       | 47.53 ns          | 68.07 ns               | **O(log N)**     |
 | **`SmallBitVec`**     | Get 64      | 225.09 ns         | 108.49 ns              | **2.07x faster** |
 | **`SmallBitVec`**     | Push 64     | 249.88 ns         | 141.74 ns              | **1.76x faster** |
 | **`SmallBTreeMap`**   | Insert 8    | 126.28 ns         | 61.85 ns               | **2.04x faster** |
@@ -223,6 +243,19 @@ Benchmarked to measure the overhead of the "Small" tagged-union dispatch vs pure
 | **`SmallOrderedMap`** | Insert 16 | 321 ns       | **101 ns**        | 89 ns               | **3.18x faster**    | **3.61x faster**   |
 | **`SmallOrderedMap`** | Get 16    | 215 ns       | **76 ns**         | 78 ns               | **2.83x faster**    | **2.76x faster**   |
 
+### 3. LRU Backend Comparison (Linear vs BTree vs Map)
+
+For smaller capacities, the choice of backend significantly impacts performance.
+
+| N   | Operation | Map (HeaplessLru) | **BTree (HeaplessBTreeLru)** | Linear (HeaplessLinearLru) | Best Case |
+| :-- | :-------- | :---------------- | :--------------------------- | :------------------------- | :-------- |
+| 8   | Put       | 587 ns            | 485 ns                       | **366 ns**                 | Linear    |
+| 16  | Put       | 702 ns            | 572 ns                       | **522 ns**                 | Linear    |
+| 64  | Put       | **1.14 µs**       | 1.62 µs                      | 3.96 µs                    | Map       |
+| 16  | Get (Hit) | **95 ns**         | 151 ns                       | 362 ns                     | Map       |
+| 64  | Get (Hit) | **409 ns**        | 927 ns                       | 5.54 µs                    | Map       |
+| 128 | Get (Hit) | **846 ns**        | 1.93 µs                      | 23.4 µs                    | Map       |
+
 _Benchmarks measured using Criterion. `Small` collections incur a negligible dispatch overhead but offer a seamless transition to the heap once capacity is reached._
 
 ## 🏗️ Design Rationale: Custom Stack Backends
@@ -230,10 +263,12 @@ _Benchmarks measured using Criterion. `Small` collections incur a negligible dis
 While we leverage the `heapless` crate for foundational storage, `small_collections` includes several custom-built stack-allocated engines. This was necessary to fill gaps in the ecosystem and support our **spill-to-heap** protocol:
 
 1.  **`HeaplessBTreeMap`**: Upstream `heapless` primarily provides `LinearMap` (O(N)) and `IndexMap`. We required a true B-Tree implementation to support sorted associative storage with $O(\log N)$ performance.
-2.  **`HeaplessLruCache`**: No fixed-capacity LRU cache existed in the ecosystem that supported the performance targets we required. Ours uses a **Struct-of-Arrays (SoA)** layout to maximize cache-line utilization during lookups.
+2.  **`HeaplessLruCache`**: Map-based LRU optimized for larger stack capacities. It uses a **Struct-of-Arrays (SoA)** layout for cache efficiency and a **singly-linked free-list** embedded within the next-pointer array to achieve O(1) allocation with zero extra memory overhead.
 3.  **`HeaplessBitVec`**: Standard stack bit-arrays (like those in `bitvec::BitArray`) often have fixed lengths or lack the specific ownership-transfer APIs needed to "spill" bit-data into a heap-allocated `bitvec::BitVec` without cloning.
 4.  **`HeaplessOrderedMap`**: Necessary to maintain strict insertion-order preservation while providing the "take ownership" hooks used by `SmallOrderedMap` during migration.
-5.  **`SmallDeque`**: While `heapless` provides a `Deque`, ours uses a custom ring-buffer implementation to allow index management (head/len) to exist outside the storage union. This ensures backend independence and enables order-preserving, zero-copy spills to the heap.
+5.  **`HeaplessLinearLruCache`**: Optimized for tiny working sets ($N < 16$). Highly efficient linear scanning that eliminates hashing latency and minimizes stack metadata.
+6.  **`HeaplessBTreeLruCache`**: The **default backend** for `SmallLruCache`. Bridges the gap with $O(\log N)$ binary search on a sorted index of physical slot IDs, providing stable performance without data shifting.
+7.  **`SmallDeque`**: While `heapless` provides a `Deque`, ours uses a custom ring-buffer implementation to allow index management (head/len) to exist outside the storage union. This ensures backend independence and enables order-preserving, zero-copy spills to the heap.
 
 ### Why use `small_collections`?
 

@@ -115,12 +115,17 @@ pub mod deque;
 pub mod heap;
 #[cfg(feature = "bitvec")]
 pub mod heapless_bitvec;
+#[cfg(feature = "lru")]
+pub mod heapless_btree_lru_cache;
 pub mod heapless_btree_map;
+#[cfg(feature = "lru")]
+pub mod heapless_linear_lru_cache;
 #[cfg(feature = "lru")]
 pub mod heapless_lru_cache;
 #[cfg(feature = "ordered")]
 pub mod heapless_ordered_map;
 #[cfg(feature = "lru")]
+pub mod index_type;
 pub mod lru_cache;
 pub mod map;
 #[cfg(feature = "ordered")]
@@ -141,11 +146,16 @@ pub use deque::{AnyDeque, SmallDeque};
 pub use heap::{AnyHeap, SmallBinaryHeap};
 #[cfg(feature = "bitvec")]
 pub use heapless_bitvec::HeaplessBitVec;
+#[cfg(feature = "lru")]
+pub use heapless_btree_lru_cache::HeaplessBTreeLruCache;
 pub use heapless_btree_map::{Entry as BTreeEntry, HeaplessBTreeMap};
 #[cfg(feature = "lru")]
-pub use heapless_lru_cache::{HeaplessLruCache, IndexType};
+pub use heapless_linear_lru_cache::HeaplessLinearLruCache;
+#[cfg(feature = "lru")]
+pub use heapless_lru_cache::HeaplessLruCache;
 #[cfg(feature = "ordered")]
 pub use heapless_ordered_map::HeaplessOrderedMap;
+pub use index_type::IndexType;
 #[cfg(feature = "lru")]
 pub use lru_cache::{AnyLruCache, SmallLruCache};
 pub use map::{AnyMap, SmallMap};
