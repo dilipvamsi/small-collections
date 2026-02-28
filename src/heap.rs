@@ -1,3 +1,12 @@
+//! Priority queue that lives on the stack and spills to the heap.
+//!
+//! Provides [`SmallBinaryHeap`] — backed by `heapless::binary_heap::BinaryHeap` on the stack
+//! and `std::collections::BinaryHeap` on the heap.  Supports both max-heap ([`Max`]) and
+//! min-heap ([`Min`]) orderings via the [`HeapKind`] trait, which wraps `Min` elements in
+//! `core::cmp::Reverse` to invert the ordering for `std::collections::BinaryHeap`.
+//!
+//! [`AnyHeap`] is an object-safe trait abstracting over both backends.
+
 use core::cmp::Reverse;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};

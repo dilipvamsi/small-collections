@@ -1,18 +1,32 @@
+#![cfg(feature = "bitvec")]
+//! Stack-allocated bit vector — the stack half of [`SmallBitVec`](crate::bitvec::SmallBitVec).
+//!
+//! Capacity is measured in **bytes** (`N`); total bit capacity is `N * 8`.
+//! Uses `bitvec`'s `BitOrder` generic to control the bit-within-byte ordering.
+
 use bitvec::prelude::{BitOrder, Lsb0};
 use core::marker::PhantomData;
 use heapless::Vec as HVec;
 
 use crate::bitvec::AnyBitVec;
 
-/// A stack-allocated bit vector.
+/// A **stack-allocated** bit vector backed by a `heapless::Vec<u8, N>`.
 ///
-/// # Overview
-/// `N` is the capacity in **BYTES**.
-/// Total bit capacity = `N * 8`.
-/// Uses `bitvec`'s `BitOrder` for defining how bits are arranged within bytes.
+/// # Capacity
+/// `N` is the byte capacity.  The maximum number of bits is `N * 8`.
+///
+/// # Bit ordering
+/// The `O: BitOrder` generic controls how bits are arranged within each byte.
+/// The default is `Lsb0` (least-significant-bit first), matching `bitvec`'s default.
+///
+/// # Design Consideration
+/// Bits are stored as packed `u8` bytes.  Individual bit access uses manual
+/// shift/mask arithmetic rather than a full `BitVec` view to avoid the overhead
+/// of slice pointer metadata on the stack.
 #[derive(Debug)]
 pub struct HeaplessBitVec<const N: usize, O: BitOrder = Lsb0> {
     bytes: HVec<u8, N>,
+    /// Number of valid bits (may be less than `bytes.len() * 8`).
     bit_len: usize,
     _order: PhantomData<O>,
 }

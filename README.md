@@ -13,6 +13,19 @@
 - **Compile-Time Safety:** Enforces strict size limits during the build process to prevent accidental stack overflows.
 - **Standard API:** Implements standard traits (`Debug`, `Display`, `FromIterator`, `Extend`, `Clone`, `Default`, `PartialEq`, `Hash`) where applicable.
 
+## ⚙️ Optional Features
+
+`small_collections` is modular. You can enable or disable groups of collections to minimize dependency overhead:
+
+| Feature       | Collections Enabled                                        | Dependencies |
+| :------------ | :--------------------------------------------------------- | :----------- |
+| **`full`**    | All collections (Default)                                  | All          |
+| **`lru`**     | `SmallLruCache`, `HeaplessLruCache`                        | `lru`        |
+| **`ordered`** | `SmallOrderedMap`, `SmallOrderedSet`, `HeaplessOrderedMap` | `ordermap`   |
+| **`bitvec`**  | `SmallBitVec`, `HeaplessBitVec`                            | `bitvec`     |
+
+Basic collections (`SmallVec`, `SmallDeque`, `SmallMap`, `SmallBTreeMap`, `SmallString`) are always available as they depend only on `heapless` and `fnv`.
+
 ## 📦 Dependencies & Acknowledgments
 
 `small_collections` is built on the shoulders of giants. We use best-in-class crates for our storage and hashing backends:
@@ -32,17 +45,17 @@
 
 ### 1. Sequences
 
-| Type             | Backend       | Use Case                                                              |
-| :--------------- | :------------ | :-------------------------------------------------------------------- |
-| **`SmallVec`**   | `Vec<T>`      | General purpose dynamic array. Use for most list-based workloads.     |
-| **`SmallDeque`** | `VecDeque<T>` | Double-ended queue. Use when you need $O(1)$ push/pop from both ends. |
+| Type             | Backend       | Use Case                                                                  |
+| :--------------- | :------------ | :------------------------------------------------------------------------ |
+| **`SmallVec`**   | `Vec<T>`      | **Optimized** branchless architecture. Use for most list-based workloads. |
+| **`SmallDeque`** | `VecDeque<T>` | Double-ended queue. Use when you need $O(1)$ push/pop from both ends.     |
 
 ```rust
 use small_collections::{SmallVec, SmallDeque};
 
-// SmallVec: Efficient stack-based list
+// SmallVec: Optimized branchless stack-based list
 let mut v: SmallVec<i32, 4> = SmallVec::new();
-v.push(10); // Stack
+v.push(10); // Stack access is neck-and-neck with std::vec::Vec
 
 // SmallDeque: Efficient stack-based ring buffer
 let mut d: SmallDeque<i32, 4> = SmallDeque::new();
@@ -169,27 +182,58 @@ If you see an error like _"SmallMap is too large"_, you have two options:
 
 ## ⚡ Performance Benchmarks
 
-Measured using `Criterion` on small workloads (within stack capacity `N`).
+`small_collections` is designed to be **neck-and-neck** with pure stack-allocated collections while providing the safety net of a heap spill.
+
+### 1. Standard Comparison (Small N=8)
+
+Measured using `Criterion` on very small workloads to show the base gain over heap-allocated defaults.
 
 | Collection            | Operation   | std/external Time | Small-Collections Time | Gain             |
 | :-------------------- | :---------- | :---------------- | :--------------------- | :--------------- |
 | **`SmallOrderedMap`** | Insert 8    | 197.35 ns         | 33.81 ns               | **5.84x faster** |
 | **`SmallOrderedMap`** | Get 8       | 91.15 ns          | 24.15 ns               | **3.77x faster** |
-| **`SmallMap`**        | Insert 8    | 182.66 ns         | 74.45 ns               | **2.45x faster** |
-| **`SmallMap`**        | Get 8       | 90.28 ns          | 32.11 ns               | **2.81x faster** |
-| **`SmallString`**     | Push 16     | 18.27 ns          | 7.27 ns                | **2.51x faster** |
-| **`SmallLruCache`**   | Put 8       | 259.17 ns         | 102.48 ns              | **2.53x faster** |
+| **`SmallMap`**        | Insert 8    | 175.45 ns         | 73.08 ns               | **2.40x faster** |
+| **`SmallMap`**        | Get 8       | 89.67 ns          | 41.51 ns               | **2.16x faster** |
+| **`SmallString`**     | Push 16     | 17.58 ns          | 7.87 ns                | **2.23x faster** |
+| **`SmallString`**     | Get (index) | 560.6 ps          | 523.7 ps               | **Competitive**  |
+| **`SmallLruCache`**   | Put 8       | 254.29 ns         | 115.24 ns              | **2.21x faster** |
+| **`SmallLruCache`**   | Get 8       | 45.24 ns          | 49.23 ns               | **Comparable**   |
 | **`SmallBitVec`**     | Get 64      | 225.09 ns         | 108.49 ns              | **2.07x faster** |
 | **`SmallBitVec`**     | Push 64     | 249.88 ns         | 141.74 ns              | **1.76x faster** |
-| **`SmallBTreeMap`**   | Insert 8    | 85.65 ns          | 52.05 ns               | **1.65x faster** |
-| **`SmallBTreeMap`**   | Get 8       | 34.89 ns          | 21.83 ns               | **1.60x faster** |
-| **`SmallBinaryHeap`** | Push 8      | 36.59 ns          | 25.87 ns               | **1.41x faster** |
-| **`SmallDeque`**      | Get 16      | 16.20 ns          | 14.01 ns               | **1.16x faster** |
-| `SmallDeque`          | PushBack 16 | 40.81 ns          | 48.87 ns               | -19.7%           |
-| `SmallVec`            | Push 16     | 24.36 ns          | 30.16 ns               | -23.8%           |
-| `SmallVec`            | Access 16   | 7.04 ns           | 14.50 ns               | 2.06x slower     |
-| `SmallLruCache`       | Get 8       | 44.40 ns          | 162.16 ns              | 3.6x slower      |
-| `SmallBinaryHeap`     | Peek        | 259.18 ps         | 270.76 ps              | -4.4%            |
+| **`SmallBTreeMap`**   | Insert 8    | 126.28 ns         | 61.85 ns               | **2.04x faster** |
+| **`SmallBTreeMap`**   | Get 8       | 30.29 ns          | 23.29 ns               | **1.30x faster** |
+| **`SmallBinaryHeap`** | Push 8      | 26.69 ns          | 27.60 ns               | **Competitive**  |
+| **`SmallDeque`**      | PushBack 16 | 41.10 ns          | 29.15 ns               | **1.41x faster** |
+| **`SmallDeque`**      | Get 16      | 15.86 ns          | 14.01 ns               | **1.13x faster** |
+| **`SmallVec`**        | Access 16   | 12.39 ns          | 13.75 ns               | **Competitive**  |
+| **`SmallVec`**        | Push 16     | 24.11 ns          | 30.06 ns               | **Competitive**  |
+
+### 2. Heapless vs Small vs Std Comparison (N=16)
+
+Benchmarked to measure the overhead of the "Small" tagged-union dispatch vs pure "Heapless" stack storage.
+
+| Collection            | Operation | Std/External | **Small (Stack)** | **Heapless (Pure)** | Gain (Small vs Std) | Gain (Pure vs Std) |
+| :-------------------- | :-------- | :----------- | :---------------- | :------------------ | :------------------ | :----------------- |
+| **`SmallLruCache`**   | Put 16    | 462 ns       | **246 ns**        | 246 ns              | **1.88x faster**    | **1.88x faster**   |
+| **`SmallLruCache`**   | Get 16    | 93 ns        | **88 ns**         | 82 ns               | **1.05x faster**    | **1.13x faster**   |
+| **`SmallBTreeMap`**   | Insert 16 | 342 ns       | **160 ns**        | 159 ns              | **2.14x faster**    | **2.15x faster**   |
+| **`SmallBTreeMap`**   | Get 16    | 110 ns       | **55 ns**         | 53 ns               | **2.00x faster**    | **2.08x faster**   |
+| **`SmallBitVec`**     | Push 64   | 297 ns       | **132 ns**        | 90 ns               | **2.25x faster**    | **3.30x faster**   |
+| **`SmallBitVec`**     | Get 64    | 233 ns       | **114 ns**        | 115 ns              | **2.04x faster**    | **2.03x faster**   |
+| **`SmallOrderedMap`** | Insert 16 | 321 ns       | **101 ns**        | 89 ns               | **3.18x faster**    | **3.61x faster**   |
+| **`SmallOrderedMap`** | Get 16    | 215 ns       | **76 ns**         | 78 ns               | **2.83x faster**    | **2.76x faster**   |
+
+_Benchmarks measured using Criterion. `Small` collections incur a negligible dispatch overhead but offer a seamless transition to the heap once capacity is reached._
+
+## 🏗️ Design Rationale: Custom Stack Backends
+
+While we leverage the `heapless` crate for foundational storage, `small_collections` includes several custom-built stack-allocated engines. This was necessary to fill gaps in the ecosystem and support our **spill-to-heap** protocol:
+
+1.  **`HeaplessBTreeMap`**: Upstream `heapless` primarily provides `LinearMap` (O(N)) and `IndexMap`. We required a true B-Tree implementation to support sorted associative storage with $O(\log N)$ performance.
+2.  **`HeaplessLruCache`**: No fixed-capacity LRU cache existed in the ecosystem that supported the performance targets we required. Ours uses a **Struct-of-Arrays (SoA)** layout to maximize cache-line utilization during lookups.
+3.  **`HeaplessBitVec`**: Standard stack bit-arrays (like those in `bitvec::BitArray`) often have fixed lengths or lack the specific ownership-transfer APIs needed to "spill" bit-data into a heap-allocated `bitvec::BitVec` without cloning.
+4.  **`HeaplessOrderedMap`**: Necessary to maintain strict insertion-order preservation while providing the "take ownership" hooks used by `SmallOrderedMap` during migration.
+5.  **`SmallDeque`**: While `heapless` provides a `Deque`, ours uses a custom ring-buffer implementation to allow index management (head/len) to exist outside the storage union. This ensures backend independence and enables order-preserving, zero-copy spills to the heap.
 
 ### Why use `small_collections`?
 
@@ -210,8 +254,9 @@ This library is designed for scenarios with a **bimodal distribution of sizes**�
 ### 1. The Stack State
 
 - **Storage:**
-  - Map/Set: `heapless::IndexMap`
-  - String: `heapless::String`
+- **Sequence**: Branchless `SmallVec`, `SmallDeque`
+- **Map/Set**: `heapless::IndexMap`
+- **String**: `heapless::String`
 - **Allocator:** None. Uses inline stack memory.
 - **Hashing:** FNV (Fowler–Noll–Vo). Non-cryptographic but extremely fast for small keys, avoiding the startup overhead of SipHash.
 

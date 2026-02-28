@@ -1,3 +1,12 @@
+#![cfg(feature = "ordered")]
+//! Insertion-order-preserving map that lives on the stack and spills to the heap.
+//!
+//! Provides [`SmallOrderedMap`] — backed by [`HeaplessOrderedMap`] on the stack
+//! and [`ordermap::OrderMap`] on the heap.  Insertion order is maintained across
+//! both storage backends.
+//!
+//! Re-exports [`AnyMap`] from `map.rs` as the common trait.
+
 use core::mem::ManuallyDrop;
 use core::ptr;
 use std::borrow::Borrow;
@@ -6,8 +15,9 @@ use std::hash::Hash;
 use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
 
-use heapless::LinearMap;
 use ordermap::OrderMap;
+
+use crate::heapless_ordered_map::HeaplessOrderedMap;
 
 /// A trait for abstraction over different map types (Stack, Heap, Small).
 /// (Imported or redefined for convenience in this module)
@@ -53,16 +63,34 @@ impl<K: Eq + Hash, V, S: std::hash::BuildHasher> AnyMap<K, V> for OrderMap<K, V,
     }
 }
 
-/// A map that preserves insertion order and lives on the stack for `N` items, then spills to the heap.
+/// An insertion-order-preserving map that lives on the stack for up to `N` entries,
+/// then spills to a heap-allocated `ordermap::OrderMap`.
 ///
-/// # Overview
-/// This collection uses `heapless::LinearMap` for stack storage and
-/// `ordermap::OrderMap` for heap storage. Insertion order is maintained in both states.
+/// # Storage strategy
+/// Uses a tagged union ([`MapData`]) with:
+/// - **Stack side**: [`HeaplessOrderedMap<K, V, N>`] — `heapless::LinearMap` wrapper.
+/// - **Heap side**: `ordermap::OrderMap<K, V>` — insertion-order-preserving hash map.
+///
+/// # Generic parameters
+/// | Parameter | Meaning |
+/// |-----------|--------|
+/// | `K` | Key type; must implement `Eq + Hash` |
+/// | `V` | Value type |
+/// | `N` | Stack capacity — max entries before spill |
+///
+/// # Design Considerations
+/// - **Insertion order**: unlike `SmallMap` (which uses `HashMap` on the heap), this
+///   type uses `OrderMap` which preserves insertion order even after a spill.
+/// - **`K: Eq + Hash` on the struct**: required by `HeaplessOrderedMap` and propagated
+///   to the outer struct to satisfy the `MapData` union's bounds.
+/// - **`remove` rebuilds on stack**: because `heapless::LinearMap::remove` requires
+///   `K: PartialEq<Q>` (stricter than `Borrow<Q>`), the stack-side `remove` is
+///   implemented by draining and rebuilding via `HeaplessOrderedMap::remove`.
 ///
 /// # Safety
-/// * `on_stack` tag determines which side of the `MapData` union is active.
-/// * `ManuallyDrop` is used to manage union variant destruction.
-pub struct SmallOrderedMap<K, V, const N: usize> {
+/// `on_stack` determines which variant of `MapData` is active.  Only the active
+/// variant may be accessed.
+pub struct SmallOrderedMap<K: Eq + Hash, V, const N: usize> {
     on_stack: bool,
     data: MapData<K, V, N>,
 }
@@ -110,8 +138,8 @@ impl<K: Eq + Hash, V, const N: usize> AnyMap<K, V> for SmallOrderedMap<K, V, N> 
 }
 
 /// Internal storage for `SmallOrderedMap`.
-union MapData<K, V, const N: usize> {
-    stack: ManuallyDrop<LinearMap<K, V, N>>,
+union MapData<K: Eq + Hash, V, const N: usize> {
+    stack: ManuallyDrop<HeaplessOrderedMap<K, V, N>>,
     heap: ManuallyDrop<OrderMap<K, V>>,
 }
 
@@ -133,7 +161,7 @@ where
         Self {
             on_stack: true,
             data: MapData {
-                stack: ManuallyDrop::new(LinearMap::new()),
+                stack: ManuallyDrop::new(HeaplessOrderedMap::new()),
             },
         }
     }
@@ -176,11 +204,12 @@ where
         unsafe {
             if self.on_stack {
                 let stack_map = &mut *self.data.stack;
-
-                if stack_map.len() == N && !stack_map.contains_key(&key) {
-                    self.spill_to_heap();
-                } else {
-                    return stack_map.insert(key, value).ok().flatten();
+                match stack_map.insert(key, value) {
+                    Ok(old) => return old,
+                    Err((k, v)) => {
+                        self.spill_to_heap();
+                        return (*self.data.heap).insert(k, v);
+                    }
                 }
             }
 
@@ -196,12 +225,7 @@ where
     {
         unsafe {
             if self.on_stack {
-                // LinearMap doesn't support Borrow lookups natively
-                self.data
-                    .stack
-                    .iter()
-                    .find(|&(k, _)| <K as Borrow<Q>>::borrow(k) == key)
-                    .map(|(_, v)| v)
+                self.data.stack.get(key)
             } else {
                 self.data.heap.get(key)
             }
@@ -216,10 +240,7 @@ where
     {
         unsafe {
             if self.on_stack {
-                (*self.data.stack)
-                    .iter_mut()
-                    .find(|&(ref k, _)| <K as Borrow<Q>>::borrow(k) == key)
-                    .map(|(_, v)| v)
+                (*self.data.stack).get_mut(key)
             } else {
                 (*self.data.heap).get_mut(key)
             }
@@ -233,37 +254,7 @@ where
     {
         unsafe {
             if self.on_stack {
-                let stack = &mut *self.data.stack;
-                // Linear scan using borrow() to avoid PartialEq<Q> bound on K
-                stack
-                    .iter()
-                    .find(|(k, _)| <K as Borrow<Q>>::borrow(k) == key)?;
-
-                // heapless::LinearMap doesn't have remove_at,
-                // but we can manually rebuild or if it has a way to remove by key...
-                // Actually, LinearMap::remove(key) requires K: PartialEq<Q>.
-                // We'll use the fact that we have the index to manually swap_remove if it's the only way,
-                // or just call into_iter and collect into a new stack map (since N is small).
-
-                // Better: LinearMap::remove(key) is what we want, but we can't call it if K doesn't impl PartialEq<Q>.
-                // Wait, if we know it's at 'idx', we can just remove it from the underlying buffer?
-                // LinearMap is a private wrapper around a heapless::Vec of (K, V).
-
-                // For now, let's use a slightly less efficient but correct implementation for the trait:
-                let mut temp_stack: LinearMap<K, V, N> = LinearMap::new();
-                let mut removed_val = None;
-
-                // We move items out and back in
-                let old_stack = core::ptr::read(stack);
-                for (k, v) in old_stack.into_iter() {
-                    if k.borrow() == key && removed_val.is_none() {
-                        removed_val = Some(v);
-                    } else {
-                        let _ = temp_stack.insert(k, v);
-                    }
-                }
-                core::ptr::write(stack, temp_stack);
-                removed_val
+                (*self.data.stack).remove(key)
             } else {
                 (*self.data.heap).remove(key)
             }
@@ -282,10 +273,10 @@ where
     #[inline(never)]
     unsafe fn spill_to_heap(&mut self) {
         unsafe {
-            let stack_map = ptr::read(&*self.data.stack);
+            let stack_map = ManuallyDrop::take(&mut self.data.stack);
             let mut new_heap = OrderMap::with_capacity(stack_map.len() * 2);
 
-            for (key, value) in stack_map.into_iter() {
+            for (key, value) in stack_map {
                 new_heap.insert(key, value);
             }
 
@@ -321,7 +312,7 @@ where
 
 // --- Traits ---
 
-impl<K, V, const N: usize> Drop for SmallOrderedMap<K, V, N> {
+impl<K: Eq + Hash, V, const N: usize> Drop for SmallOrderedMap<K, V, N> {
     fn drop(&mut self) {
         unsafe {
             if self.on_stack {
@@ -416,12 +407,15 @@ where
     type IntoIter = SmallMapIntoIter<K, V, N>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let this = ManuallyDrop::new(self);
+        let mut this = ManuallyDrop::new(self);
         unsafe {
             if this.on_stack {
-                SmallMapIntoIter::Stack(ptr::read(&*this.data.stack).into_iter())
+                SmallMapIntoIter::Stack(
+                    ManuallyDrop::<HeaplessOrderedMap<K, V, N>>::take(&mut this.data.stack)
+                        .into_iter(),
+                )
             } else {
-                SmallMapIntoIter::Heap(ptr::read(&*this.data.heap).into_iter())
+                SmallMapIntoIter::Heap(ManuallyDrop::take(&mut this.data.heap).into_iter())
             }
         }
     }

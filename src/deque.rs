@@ -1,22 +1,67 @@
-use core::mem::ManuallyDrop;
+//! Stack-allocated double-ended queue that spills to the heap when full.
+//!
+//! # Why not `heapless::Deque`?
+//! `heapless::Deque` exists but was intentionally **not** used as the stack-side storage
+//! for [`SmallDeque`].  The key reasons are:
+//!
+//! 1. **Forced power-of-two capacity**: `heapless::Deque<T, N>` internally requires
+//!    `N` to be a power of two to support its bitmask-based wrap-around arithmetic.
+//!    `SmallDeque` imposes the same constraint, yet needs to manage the ring-buffer
+//!    indices (head/len) *outside* the stored data so they can be preserved independent
+//!    of the storage backend.  Embedding them inside a `heapless::Deque` value stored
+//!    in a union field would require reading from the (possibly heap-active) union branch,
+//!    which is unsound without unsafe indirection that yields no benefit over the raw
+//!    `[MaybeUninit<T>; N]` approach used here.
+//!
+//! 2. **No first-class drain/into-iter that preserves ring order**: when spilling to the
+//!    heap we need to iterate in logical order (head … tail) to fill `VecDeque`.  The
+//!    raw-array approach gives us direct index arithmetic (`wrap_add`) to do this;
+//!    `heapless::Deque` would require an additional copy through its iterator which
+//!    offers the same cost but less control.
+//!
+//! 3. **Union soundness**: the `DequeData` union holds either a raw array or a
+//!    heap-allocated `VecDeque`.  `heapless::Deque` contains internal state (`read`,
+//!    `write` cursors) that would be overwritten if treated as an uninitialised `VecDeque`
+//!    and vice versa.  Using `[MaybeUninit<T>; N]` makes the union semantics trivial:
+//!    the stack side is just memory, no drop glue.
+
+use core::fmt;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ptr;
 use std::collections::VecDeque;
-use std::fmt;
 
-/// A trait for abstraction over different double-ended queue types (Stack, Heap, Small).
+// ─── AnyDeque ─────────────────────────────────────────────────────────────────
+
+/// An object-safe abstraction over double-ended queue types.
+///
+/// Implemented by both `VecDeque<T>` (heap) and `SmallDeque<T, N>` (small/stack)
+/// so that code can operate on a deque without knowing which backend is active.
 pub trait AnyDeque<T> {
+    /// Returns the number of elements in the deque.
     fn len(&self) -> usize;
+    /// Returns `true` if the deque contains no elements.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Appends an element to the back.
     fn push_back(&mut self, item: T);
+    /// Prepends an element to the front.
     fn push_front(&mut self, item: T);
+    /// Removes and returns the element from the back, or `None` if empty.
     fn pop_back(&mut self) -> Option<T>;
+    /// Removes and returns the element from the front, or `None` if empty.
     fn pop_front(&mut self) -> Option<T>;
+    /// Removes and returns the element at `index`, or `None` if out of bounds.
+    fn remove(&mut self, index: usize) -> Option<T>;
+    /// Removes all elements.
     fn clear(&mut self);
+    /// Returns a shared reference to the front element, or `None` if empty.
     fn front(&self) -> Option<&T>;
+    /// Returns a shared reference to the back element, or `None` if empty.
     fn back(&self) -> Option<&T>;
+    /// Returns an exclusive reference to the front element, or `None` if empty.
     fn front_mut(&mut self) -> Option<&mut T>;
+    /// Returns an exclusive reference to the back element, or `None` if empty.
     fn back_mut(&mut self) -> Option<&mut T>;
 }
 
@@ -36,6 +81,9 @@ impl<T> AnyDeque<T> for VecDeque<T> {
     fn pop_front(&mut self) -> Option<T> {
         self.pop_front()
     }
+    fn remove(&mut self, index: usize) -> Option<T> {
+        self.remove(index)
+    }
     fn clear(&mut self) {
         self.clear();
     }
@@ -53,23 +101,54 @@ impl<T> AnyDeque<T> for VecDeque<T> {
     }
 }
 
-/// A double-ended queue that lives on the stack for `N` items, then spills to the heap.
+/// Tagged union holding either the stack ring-buffer or the heap `VecDeque`.
 ///
-/// # Overview
-/// This collection uses a `heapless::Deque` (ring-buffer) for stack storage and a
-/// `std::collections::VecDeque` (ring-buffer) for heap storage.
+/// # Safety
+/// The active variant is tracked by `SmallDeque::on_stack`.  Only the active
+/// variant must be accessed at any time.  The stack variant is
+/// `[MaybeUninit<T>; N]`, so it has no drop glue — `ManuallyDrop` around the
+/// stack side is therefore redundant but kept for symmetry with the heap side.
+pub union DequeData<T, const N: usize> {
+    pub stack: ManuallyDrop<[MaybeUninit<T>; N]>,
+    pub heap: ManuallyDrop<VecDeque<T>>,
+}
+
+/// A double-ended queue that lives on the stack for up to `N` items, then spills to
+/// a heap-allocated `VecDeque` transparently.
 ///
-/// # Invariants
-/// * `on_stack` tag determines which side of the `DequeData` union is active.
-/// * `N` must be a power of two due to `heapless` implementation details.
+/// # Stack representation
+/// Items are stored in a ring buffer of `[MaybeUninit<T>; N]` with a `head` cursor and
+/// a `len` counter.  Two helpers, `wrap_add` and `wrap_sub`, implement the modular
+/// arithmetic using a bitmask (requires `N` to be a power of two — enforced by a
+/// `const` assertion in [`new`](SmallDeque::new)).
+///
+/// # Spill behaviour
+/// When `push_back` or `push_front` causes `len > capacity` on the stack, the ring
+/// buffer is drained in logical order into a freshly heap-allocated `VecDeque` via
+/// `spill_to_heap`.  After a spill, all subsequent mutations go directly to the
+/// `VecDeque`; the struct never returns to stack storage.
+///
+/// # Generic parameters
+/// | Parameter | Meaning |
+/// |-----------|--------|
+/// | `T` | Element type |
+/// | `N` | Stack capacity; **must be a power of two** |
+///
+/// # Compile-time assertions
+/// `new()` uses `const { assert!(...) }` to verify:
+/// - `size_of::<Self>() <= 16 KiB` — prevents accidental blowing of the stack frame.
+/// - `N.is_power_of_two()` — required for bitmask ring-buffer arithmetic.
 pub struct SmallDeque<T, const N: usize> {
+    len: usize,
+    capacity: usize,
+    head: usize,
     on_stack: bool,
     data: DequeData<T, N>,
 }
 
 impl<T, const N: usize> AnyDeque<T> for SmallDeque<T, N> {
     fn len(&self) -> usize {
-        self.len()
+        self.len
     }
     fn push_back(&mut self, item: T) {
         self.push_back(item);
@@ -83,6 +162,9 @@ impl<T, const N: usize> AnyDeque<T> for SmallDeque<T, N> {
     fn pop_front(&mut self) -> Option<T> {
         self.pop_front()
     }
+    fn remove(&mut self, index: usize) -> Option<T> {
+        self.remove(index)
+    }
     fn clear(&mut self) {
         self.clear();
     }
@@ -100,445 +182,436 @@ impl<T, const N: usize> AnyDeque<T> for SmallDeque<T, N> {
     }
 }
 
-/// The internal storage for `SmallDeque`.
-///
-/// We use `ManuallyDrop` because the compiler cannot know which field is active
-/// and therefore cannot automatically drop the correct one.
-union DequeData<T, const N: usize> {
-    stack: ManuallyDrop<heapless::Deque<T, N>>,
-    heap: ManuallyDrop<VecDeque<T>>,
-}
-
 impl<T, const N: usize> SmallDeque<T, N> {
-    /// Creates a new empty SmallDeque.
+    /// Maximum allowed struct size in bytes.  Prevents accidentally allocating huge
+    /// arrays on the call stack.
+    const MAX_STACK_SIZE: usize = 16 * 1024;
+
+    /// Creates a new empty deque backed by stack storage.
+    ///
+    /// # Panics (compile-time)
+    /// Asserts that `size_of::<Self>() <= 16 KiB` and that `N` is a power of two.
     pub fn new() -> Self {
         const {
+            assert!(
+                std::mem::size_of::<Self>() <= SmallDeque::<T, N>::MAX_STACK_SIZE,
+                "SmallDeque is too large! Reduce N."
+            );
             assert!(N.is_power_of_two(), "SmallDeque N must be a power of two");
         }
-
         Self {
+            len: 0,
+            capacity: N,
+            head: 0,
             on_stack: true,
             data: DequeData {
-                stack: ManuallyDrop::new(heapless::Deque::new()),
+                stack: ManuallyDrop::new(unsafe { MaybeUninit::uninit().assume_init() }),
             },
         }
     }
 
-    /// Creates a SmallDeque with a specific capacity on the heap immediately if required.
+    /// Creates a deque that starts on the heap if `capacity > N`, otherwise on the stack.
+    ///
+    /// Useful when the caller already knows the required size will exceed `N`.
     pub fn with_capacity(capacity: usize) -> Self {
         if capacity <= N {
             Self::new()
         } else {
+            let heap_deque = VecDeque::with_capacity(capacity);
             Self {
+                len: 0,
+                capacity: heap_deque.capacity(),
+                head: 0,
                 on_stack: false,
                 data: DequeData {
-                    heap: ManuallyDrop::new(VecDeque::with_capacity(capacity)),
+                    heap: ManuallyDrop::new(heap_deque),
                 },
             }
         }
     }
 
-    // --- Inspection ---
-
-    #[inline]
+    /// Returns `true` if the deque is currently using stack storage.
+    #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    /// Returns the number of elements currently in the deque.
+    #[inline(always)]
     pub fn len(&self) -> usize {
-        unsafe {
-            if self.on_stack {
-                self.data.stack.len()
-            } else {
-                self.data.heap.len()
-            }
-        }
+        self.len
     }
 
+    /// Returns `true` if the deque contains no elements.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.len == 0
     }
 
+    /// Returns the current capacity (not necessarily `N` after a spill).
+    #[inline(always)]
     pub fn capacity(&self) -> usize {
-        unsafe {
-            if self.on_stack {
-                N
-            } else {
-                self.data.heap.capacity()
-            }
-        }
+        self.capacity
     }
 
-    // --- Access ---
-
-    pub fn front(&self) -> Option<&T> {
-        unsafe {
-            if self.on_stack {
-                self.data.stack.front()
-            } else {
-                self.data.heap.front()
-            }
-        }
+    /// Maps a logical index into the ring buffer to a physical slot index.
+    /// Uses bitmask `(capacity - 1)` — valid because `N` is a power of two.
+    #[inline(always)]
+    fn wrap_add(&self, idx: usize, add: usize) -> usize {
+        (idx + add) & (self.capacity - 1)
     }
 
-    pub fn front_mut(&mut self) -> Option<&mut T> {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).front_mut()
-            } else {
-                (*self.data.heap).front_mut()
-            }
-        }
+    /// Maps a logical index into the ring buffer, wrapping backwards.
+    #[inline(always)]
+    fn wrap_sub(&self, idx: usize, sub: usize) -> usize {
+        (idx.wrapping_sub(sub)) & (self.capacity - 1)
     }
 
-    pub fn back(&self) -> Option<&T> {
-        unsafe {
-            if self.on_stack {
-                self.data.stack.back()
-            } else {
-                self.data.heap.back()
-            }
-        }
-    }
-
-    pub fn back_mut(&mut self) -> Option<&mut T> {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).back_mut()
-            } else {
-                (*self.data.heap).back_mut()
-            }
-        }
-    }
-
-    /// Returns a reference to the element at the given index.
+    /// Returns a shared reference to the element at logical `index`, or `None`.
+    ///
+    /// Logical index 0 is the front (oldest element).
+    #[inline(always)]
     pub fn get(&self, index: usize) -> Option<&T> {
-        let (s1, s2) = self.as_slices();
-        if index < s1.len() {
-            Some(&s1[index])
-        } else if index < s1.len() + s2.len() {
-            Some(&s2[index - s1.len()])
-        } else {
-            None
-        }
-    }
-
-    /// Returns a mutable reference to the element at the given index.
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        let (s1, s2) = self.as_mut_slices();
-        let s1_len = s1.len();
-        let s2_len = s2.len();
-        if index < s1_len {
-            Some(&mut s1[index])
-        } else if index < s1_len + s2_len {
-            Some(&mut s2[index - s1_len])
-        } else {
-            None
-        }
-    }
-
-    // --- Modification ---
-
-    pub fn reserve(&mut self, additional: usize) {
-        unsafe {
-            if self.on_stack {
-                if self.data.stack.len() + additional > N {
-                    self.spill_to_heap();
-                    (*self.data.heap).reserve(additional);
+        if index < self.len {
+            unsafe {
+                if self.on_stack {
+                    let real_idx = self.wrap_add(self.head, index);
+                    let ptr = (*self.data.stack).as_ptr() as *const T;
+                    Some(&*ptr.add(real_idx))
+                } else {
+                    (*self.data.heap).get(index)
                 }
-            } else {
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Returns an exclusive reference to the element at logical `index`, or `None`.
+    #[inline(always)]
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index < self.len {
+            unsafe {
+                if self.on_stack {
+                    let real_idx = self.wrap_add(self.head, index);
+                    let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                    Some(&mut *ptr.add(real_idx))
+                } else {
+                    (*self.data.heap).get_mut(index)
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Reserves capacity for at least `additional` more elements, spilling to the heap
+    /// if necessary.
+    pub fn reserve(&mut self, additional: usize) {
+        if self.len + additional > self.capacity {
+            unsafe {
+                if self.on_stack {
+                    self.spill_to_heap();
+                }
                 (*self.data.heap).reserve(additional);
+                self.capacity = (*self.data.heap).capacity();
             }
         }
     }
 
+    /// Appends `item` to the back of the deque.  Spills to heap if the stack is full.
+    #[inline(always)]
     pub fn push_back(&mut self, item: T) {
+        if self.len < self.capacity && self.on_stack {
+            unsafe {
+                let tail = self.wrap_add(self.head, self.len);
+                let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                ptr::write(ptr.add(tail), item);
+                self.len += 1;
+            }
+        } else {
+            self.grow_and_push_back(item);
+        }
+    }
+
+    /// Cold path: spills to heap then delegates `push_back`.
+    #[inline(never)]
+    fn grow_and_push_back(&mut self, item: T) {
         unsafe {
             if self.on_stack {
-                if self.data.stack.len() == N {
-                    self.spill_to_heap();
-                    // Fallthrough to heap
-                } else {
-                    match (*self.data.stack).push_back(item) {
-                        Ok(()) => return,
-                        Err(_) => unreachable!("Stack capacity check failed in push_back"),
-                    }
-                }
+                self.spill_to_heap();
             }
             (*self.data.heap).push_back(item);
+            self.len = (*self.data.heap).len();
+            self.capacity = (*self.data.heap).capacity();
         }
     }
 
+    /// Prepends `item` to the front of the deque.  Spills to heap if the stack is full.
+    #[inline(always)]
     pub fn push_front(&mut self, item: T) {
+        if self.len < self.capacity && self.on_stack {
+            unsafe {
+                self.head = self.wrap_sub(self.head, 1);
+                let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                ptr::write(ptr.add(self.head), item);
+                self.len += 1;
+            }
+        } else {
+            self.grow_and_push_front(item);
+        }
+    }
+
+    /// Cold path: spills to heap then delegates `push_front`.
+    #[inline(never)]
+    fn grow_and_push_front(&mut self, item: T) {
         unsafe {
             if self.on_stack {
-                if self.data.stack.len() == N {
-                    self.spill_to_heap();
-                    // Fallthrough to heap
-                } else {
-                    match (*self.data.stack).push_front(item) {
-                        Ok(()) => return,
-                        Err(_) => unreachable!("Stack capacity check failed in push_front"),
-                    }
-                }
+                self.spill_to_heap();
             }
             (*self.data.heap).push_front(item);
+            self.len = (*self.data.heap).len();
+            self.capacity = (*self.data.heap).capacity();
         }
     }
 
-    pub fn pop_front(&mut self) -> Option<T> {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).pop_front()
-            } else {
-                (*self.data.heap).pop_front()
-            }
-        }
-    }
-
+    /// Removes and returns the last element, or `None` if empty.
+    #[inline(always)]
     pub fn pop_back(&mut self) -> Option<T> {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).pop_back()
-            } else {
-                (*self.data.heap).pop_back()
+        if self.len == 0 {
+            None
+        } else {
+            self.len -= 1;
+            unsafe {
+                if self.on_stack {
+                    let tail = self.wrap_add(self.head, self.len);
+                    let ptr = (*self.data.stack).as_ptr() as *const T;
+                    Some(ptr::read(ptr.add(tail)))
+                } else {
+                    (*self.data.heap).pop_back()
+                }
             }
         }
     }
 
-    pub fn swap_remove_front(&mut self, index: usize) -> Option<T> {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).swap_remove_front(index)
-            } else {
-                (*self.data.heap).swap_remove_front(index)
+    /// Removes and returns the first element, or `None` if empty.
+    #[inline(always)]
+    pub fn pop_front(&mut self) -> Option<T> {
+        if self.len == 0 {
+            None
+        } else {
+            unsafe {
+                let val = if self.on_stack {
+                    let ptr = (*self.data.stack).as_ptr() as *const T;
+                    let v = ptr::read(ptr.add(self.head));
+                    self.head = self.wrap_add(self.head, 1);
+                    v
+                } else {
+                    (*self.data.heap).pop_front().unwrap()
+                };
+                self.len -= 1;
+                Some(val)
             }
         }
     }
 
-    pub fn swap_remove_back(&mut self, index: usize) -> Option<T> {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).swap_remove_back(index)
-            } else {
-                (*self.data.heap).swap_remove_back(index)
-            }
-        }
-    }
-
-    pub fn insert(&mut self, index: usize, item: T) {
-        let len = self.len();
-        assert!(index <= len, "index out of bounds");
-
-        unsafe {
-            if self.on_stack {
-                // heapless::Deque does not support arbitrary insertion easily.
-                // We spill to heap to support this API safely and completely.
-                self.spill_to_heap();
-                (*self.data.heap).insert(index, item);
-            } else {
-                (*self.data.heap).insert(index, item);
-            }
-        }
-    }
-
+    /// Removes the element at logical `index` and returns it, or `None` if out of bounds.
+    ///
+    /// Chooses whether to shift from the front or back depending on which is cheaper
+    /// (shift the shorter half).
     pub fn remove(&mut self, index: usize) -> Option<T> {
-        unsafe {
-            if self.on_stack {
-                // heapless::Deque does not support arbitrary removal easily.
-                self.spill_to_heap();
-                (*self.data.heap).remove(index)
-            } else {
-                (*self.data.heap).remove(index)
-            }
+        if index >= self.len {
+            return None;
         }
-    }
 
-    pub fn clear(&mut self) {
-        unsafe {
-            if self.on_stack {
-                (*self.data.stack).clear();
-            } else {
-                (*self.data.heap).clear();
-            }
+        if index == 0 {
+            return self.pop_front();
         }
-    }
+        if index == self.len - 1 {
+            return self.pop_back();
+        }
 
-    pub fn truncate(&mut self, len: usize) {
         unsafe {
             if self.on_stack {
-                // heapless doesn't have truncate, implement via pop_back loop
-                let current_len = (*self.data.stack).len();
-                if len < current_len {
-                    for _ in 0..(current_len - len) {
-                        (*self.data.stack).pop_back();
+                let real_idx = self.wrap_add(self.head, index);
+                let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                let val = ptr::read(ptr.add(real_idx));
+
+                // Shift elements
+                if index < self.len / 2 {
+                    // Shift head forward
+                    for i in (0..index).rev() {
+                        let from = self.wrap_add(self.head, i);
+                        let to = self.wrap_add(from, 1);
+                        ptr::copy_nonoverlapping(ptr.add(from), ptr.add(to), 1);
+                    }
+                    self.head = self.wrap_add(self.head, 1);
+                } else {
+                    // Shift tail backward
+                    for i in (index + 1)..self.len {
+                        let from = self.wrap_add(self.head, i);
+                        let to = self.wrap_sub(from, 1);
+                        ptr::copy_nonoverlapping(ptr.add(from), ptr.add(to), 1);
                     }
                 }
+                self.len -= 1;
+                Some(val)
             } else {
-                (*self.data.heap).truncate(len);
+                let val = (*self.data.heap).remove(index);
+                self.len = (*self.data.heap).len();
+                val
             }
         }
     }
 
-    // --- Slices & Iteration ---
+    /// Shortens the deque to `len`, dropping all elements beyond that point.
+    ///
+    /// If `len >= self.len()`, this is a no-op.
+    pub fn clear(&mut self) {
+        self.truncate(0);
+    }
 
-    /// Returns a pair of slices which contain the contents of the deque.
+    /// Shortens the deque to at most `len` elements, dropping those beyond.
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            unsafe {
+                if self.on_stack {
+                    let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                    for i in len..self.len {
+                        let real_idx = self.wrap_add(self.head, i);
+                        ptr::drop_in_place(ptr.add(real_idx));
+                    }
+                } else {
+                    (*self.data.heap).truncate(len);
+                }
+            }
+            self.len = len;
+        }
+    }
+
+    /// Returns a shared reference to the front element, or `None` if empty.
+    #[inline(always)]
+    pub fn front(&self) -> Option<&T> {
+        self.get(0)
+    }
+
+    /// Returns a shared reference to the back element, or `None` if empty.
+    #[inline(always)]
+    pub fn back(&self) -> Option<&T> {
+        if self.len == 0 {
+            None
+        } else {
+            self.get(self.len - 1)
+        }
+    }
+
+    /// Returns an exclusive reference to the front element, or `None` if empty.
+    #[inline(always)]
+    pub fn front_mut(&mut self) -> Option<&mut T> {
+        self.get_mut(0)
+    }
+
+    /// Returns an exclusive reference to the back element, or `None` if empty.
+    #[inline(always)]
+    pub fn back_mut(&mut self) -> Option<&mut T> {
+        if self.len == 0 {
+            None
+        } else {
+            self.get_mut(self.len - 1)
+        }
+    }
+
+    /// Returns up to two contiguous slices covering the logical range `[0, len)`.
+    ///
+    /// Returns `(head_slice, &[])` when the ring buffer hasn't wrapped, or
+    /// `(head_slice, tail_slice)` when it has.  On the heap path delegates to
+    /// `VecDeque::as_slices`.
+    #[inline(always)]
     pub fn as_slices(&self) -> (&[T], &[T]) {
         unsafe {
             if self.on_stack {
-                self.data.stack.as_slices()
+                let ptr = (*self.data.stack).as_ptr() as *const T;
+                if self.head + self.len <= self.capacity {
+                    (
+                        core::slice::from_raw_parts(ptr.add(self.head), self.len),
+                        &[],
+                    )
+                } else {
+                    let head_len = self.capacity - self.head;
+                    let tail_len = self.len - head_len;
+                    (
+                        core::slice::from_raw_parts(ptr.add(self.head), head_len),
+                        core::slice::from_raw_parts(ptr, tail_len),
+                    )
+                }
             } else {
-                self.data.heap.as_slices()
+                (*self.data.heap).as_slices()
             }
         }
     }
 
-    /// Returns a pair of mutable slices which contain the contents of the deque.
+    /// Mutable counterpart of [`as_slices`](SmallDeque::as_slices).
+    #[inline(always)]
     pub fn as_mut_slices(&mut self) -> (&mut [T], &mut [T]) {
         unsafe {
             if self.on_stack {
-                (*self.data.stack).as_mut_slices()
+                let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                if self.head + self.len <= self.capacity {
+                    (
+                        core::slice::from_raw_parts_mut(ptr.add(self.head), self.len),
+                        &mut [],
+                    )
+                } else {
+                    let head_len = self.capacity - self.head;
+                    let tail_len = self.len - head_len;
+                    let (s1, s2) = (
+                        core::slice::from_raw_parts_mut(ptr.add(self.head), head_len),
+                        core::slice::from_raw_parts_mut(ptr, tail_len),
+                    );
+                    (s1, s2)
+                }
             } else {
                 (*self.data.heap).as_mut_slices()
             }
         }
     }
 
-    /// Rearranges the internal storage so the deque is one contiguous slice.
-    pub fn make_contiguous(&mut self) -> &mut [T] {
-        unsafe {
-            if self.on_stack {
-                // heapless doesn't support make_contiguous directly.
-                // Spill to heap to satisfy the API.
-                self.spill_to_heap();
-                (*self.data.heap).make_contiguous()
-            } else {
-                (*self.data.heap).make_contiguous()
-            }
-        }
-    }
-
-    // --- Rotations ---
-
-    pub fn rotate_left(&mut self, mid: usize) {
-        unsafe {
-            if self.on_stack {
-                self.spill_to_heap();
-                (*self.data.heap).rotate_left(mid);
-            } else {
-                (*self.data.heap).rotate_left(mid);
-            }
-        }
-    }
-
-    pub fn rotate_right(&mut self, k: usize) {
-        unsafe {
-            if self.on_stack {
-                self.spill_to_heap();
-                (*self.data.heap).rotate_right(k);
-            } else {
-                (*self.data.heap).rotate_right(k);
-            }
-        }
-    }
-
-    // --- Internals ---
-
+    /// Migrates all elements from the stack ring buffer to a heap `VecDeque`.
+    ///
+    /// Elements are written in logical order (front → back) so `VecDeque` indices
+    /// match the caller's expectations.  After this call, `on_stack == false`.
+    ///
+    /// # Safety
+    /// Must only be called when `on_stack == true`.  The stack variant of `data` must
+    /// contain `len` initialized elements starting at `head`.
     #[inline(never)]
     unsafe fn spill_to_heap(&mut self) {
         unsafe {
-            let stack_deque = ptr::read(&*self.data.stack);
-            let mut heap_deque = VecDeque::with_capacity(N * 2);
-            // heapless::Deque implements IntoIterator, handling ring-buffer unwrapping automatically
-            heap_deque.extend(stack_deque.into_iter());
+            let mut heap_deque = VecDeque::with_capacity(self.capacity * 2);
+            let ptr = (*self.data.stack).as_ptr() as *const T;
+            for i in 0..self.len {
+                let real_idx = self.wrap_add(self.head, i);
+                heap_deque.push_back(ptr::read(ptr.add(real_idx)));
+            }
             ptr::write(&mut self.data.heap, ManuallyDrop::new(heap_deque));
             self.on_stack = false;
+            self.capacity = (*self.data.heap).capacity();
         }
     }
 }
-
-// --- Iterators ---
-
-pub struct Iter<'a, T> {
-    inner: IterEnum<'a, T>,
-}
-
-enum IterEnum<'a, T> {
-    Stack(heapless::deque::Iter<'a, T>),
-    Heap(std::collections::vec_deque::Iter<'a, T>),
-}
-
-impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = &'a T;
-    fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.inner {
-            IterEnum::Stack(i) => i.next(),
-            IterEnum::Heap(i) => i.next(),
-        }
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.inner {
-            IterEnum::Stack(i) => i.size_hint(),
-            IterEnum::Heap(i) => i.size_hint(),
-        }
-    }
-}
-
-impl<T, const N: usize> SmallDeque<T, N> {
-    pub fn iter(&self) -> Iter<'_, T> {
-        unsafe {
-            if self.on_stack {
-                Iter {
-                    inner: IterEnum::Stack(self.data.stack.iter()),
-                }
-            } else {
-                Iter {
-                    inner: IterEnum::Heap(self.data.heap.iter()),
-                }
-            }
-        }
-    }
-}
-
-pub struct IntoIter<T, const N: usize> {
-    deque: SmallDeque<T, N>,
-}
-
-impl<T, const N: usize> Iterator for IntoIter<T, N> {
-    type Item = T;
-    fn next(&mut self) -> Option<T> {
-        self.deque.pop_front()
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.deque.len();
-        (len, Some(len))
-    }
-}
-
-impl<T, const N: usize> IntoIterator for SmallDeque<T, N> {
-    type Item = T;
-    type IntoIter = IntoIter<T, N>;
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter { deque: self }
-    }
-}
-
-impl<'a, T, const N: usize> IntoIterator for &'a SmallDeque<T, N> {
-    type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-// --- Traits ---
 
 impl<T, const N: usize> Drop for SmallDeque<T, N> {
     fn drop(&mut self) {
-        unsafe {
-            if self.on_stack {
-                ManuallyDrop::drop(&mut self.data.stack);
-            } else {
+        if self.on_stack {
+            unsafe {
+                let ptr = (*self.data.stack).as_mut_ptr() as *mut T;
+                for i in 0..self.len {
+                    let real_idx = self.wrap_add(self.head, i);
+                    ptr::drop_in_place(ptr.add(real_idx));
+                }
+            }
+        } else {
+            unsafe {
                 ManuallyDrop::drop(&mut self.data.heap);
             }
         }
@@ -547,21 +620,37 @@ impl<T, const N: usize> Drop for SmallDeque<T, N> {
 
 impl<T: Clone, const N: usize> Clone for SmallDeque<T, N> {
     fn clone(&self) -> Self {
-        unsafe {
-            if self.on_stack {
-                Self {
-                    on_stack: true,
-                    data: DequeData {
-                        stack: ManuallyDrop::new((*self.data.stack).clone()),
-                    },
-                }
-            } else {
-                Self {
-                    on_stack: false,
-                    data: DequeData {
-                        heap: ManuallyDrop::new((*self.data.heap).clone()),
-                    },
-                }
+        if self.on_stack {
+            let mut stack_arr: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
+            let (s1, s2) = self.as_slices();
+            let mut idx = 0;
+            for item in s1 {
+                stack_arr[idx] = MaybeUninit::new(item.clone());
+                idx += 1;
+            }
+            for item in s2 {
+                stack_arr[idx] = MaybeUninit::new(item.clone());
+                idx += 1;
+            }
+            Self {
+                len: self.len,
+                capacity: N,
+                head: 0,
+                on_stack: true,
+                data: DequeData {
+                    stack: ManuallyDrop::new(stack_arr),
+                },
+            }
+        } else {
+            let heap_deque = unsafe { (*self.data.heap).clone() };
+            Self {
+                len: self.len,
+                capacity: heap_deque.capacity(),
+                head: 0,
+                on_stack: false,
+                data: DequeData {
+                    heap: ManuallyDrop::new(heap_deque),
+                },
             }
         }
     }
@@ -569,7 +658,8 @@ impl<T: Clone, const N: usize> Clone for SmallDeque<T, N> {
 
 impl<T: fmt::Debug, const N: usize> fmt::Debug for SmallDeque<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.iter()).finish()
+        let (s1, s2) = self.as_slices();
+        f.debug_list().entries(s1.iter().chain(s2.iter())).finish()
     }
 }
 
@@ -581,22 +671,23 @@ impl<T, const N: usize> Default for SmallDeque<T, N> {
 
 impl<T: PartialEq, const N: usize> PartialEq for SmallDeque<T, N> {
     fn eq(&self, other: &Self) -> bool {
-        if self.len() != other.len() {
+        if self.len != other.len {
             return false;
         }
-        self.iter().zip(other.iter()).all(|(a, b)| a == b)
+        let (s1_a, s2_a) = self.as_slices();
+        let (s1_b, s2_b) = other.as_slices();
+        s1_a.iter()
+            .chain(s2_a.iter())
+            .zip(s1_b.iter().chain(s2_b.iter()))
+            .all(|(a, b)| a == b)
     }
 }
-
 impl<T: Eq, const N: usize> Eq for SmallDeque<T, N> {}
 
 impl<T, const N: usize> Extend<T> for SmallDeque<T, N> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        let iter = iter.into_iter();
-        let (lower, _) = iter.size_hint();
-        self.reserve(lower);
-        for item in iter {
-            self.push_back(item);
+        for i in iter {
+            self.push_back(i);
         }
     }
 }
@@ -609,284 +700,221 @@ impl<T, const N: usize> FromIterator<T> for SmallDeque<T, N> {
     }
 }
 
-// --- Tests ---
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ─── basic stack ops ──────────────────────────────────────────────────────
     #[test]
-    fn test_deque_stack_lifecycle_basic() {
+    fn test_deque_stack_ops_basic() {
         let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        assert!(d.is_empty());
+        assert!(d.is_on_stack());
         d.push_back(1);
         d.push_back(2);
-        d.push_front(0); // [0, 1, 2]
-
-        assert!(d.is_on_stack());
+        d.push_front(0);
         assert_eq!(d.len(), 3);
         assert_eq!(d.front(), Some(&0));
         assert_eq!(d.back(), Some(&2));
-
         assert_eq!(d.pop_front(), Some(0));
         assert_eq!(d.pop_back(), Some(2));
-        assert_eq!(d.pop_back(), Some(1));
-        assert!(d.is_empty());
+        assert_eq!(d.len(), 1);
+        assert!(d.is_on_stack());
     }
 
     #[test]
-    fn test_deque_spill_trigger_on_push_back() {
+    fn test_deque_stack_ops_pop_empty() {
         let mut d: SmallDeque<i32, 4> = SmallDeque::new();
-        // Fill stack
+        assert_eq!(d.pop_front(), None);
+        assert_eq!(d.pop_back(), None);
+        assert_eq!(d.front(), None);
+        assert_eq!(d.back(), None);
+    }
+
+    // ─── wrap-around (ring buffer) ────────────────────────────────────────────
+    #[test]
+    fn test_deque_stack_wrap_ring_buffer() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
         d.push_back(1);
         d.push_back(2);
+        d.pop_front(); // head advances
+        d.pop_front();
+        // head is now at index 2
         d.push_back(3);
         d.push_back(4);
-        assert!(d.is_on_stack());
-
-        // Push 5th -> Spill
         d.push_back(5);
+        d.push_back(6); // wrapped: [3,4,5,6]
+        assert!(d.is_on_stack());
+        assert_eq!(d.pop_front(), Some(3));
+        assert_eq!(d.pop_front(), Some(4));
+        assert_eq!(d.pop_front(), Some(5));
+        assert_eq!(d.pop_front(), Some(6));
+    }
+
+    // ─── spill ────────────────────────────────────────────────────────────────
+    #[test]
+    fn test_deque_spill_trigger() {
+        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        assert!(d.is_on_stack());
+        d.push_back(3); // spill
         assert!(!d.is_on_stack());
-
-        // Check integrity after spill
-        assert_eq!(d.len(), 5);
-        let vec: Vec<_> = d.iter().cloned().collect();
-        assert_eq!(vec, vec![1, 2, 3, 4, 5]);
-
-        // Continue heap ops
-        d.push_front(0);
-        assert_eq!(d.front(), Some(&0));
+        assert_eq!(d.len(), 3);
     }
 
     #[test]
-    fn test_deque_spill_trigger_on_push_front() {
-        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
-        for i in 0..4 {
+    fn test_deque_spill_data_integrity() {
+        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
+        d.push_back(10);
+        d.push_back(20);
+        d.push_back(30); // spill
+        assert_eq!(d.pop_front(), Some(10));
+        assert_eq!(d.pop_front(), Some(20));
+        assert_eq!(d.pop_front(), Some(30));
+        assert_eq!(d.pop_front(), None);
+    }
+
+    #[test]
+    fn test_deque_spill_front_back_after_spill() {
+        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
+        for i in 0..10 {
             d.push_back(i);
-        } // [0,1,2,3]
-
-        // Spill via push_front
-        d.push_front(99); // [99, 0, 1, 2, 3]
+        }
         assert!(!d.is_on_stack());
-        assert_eq!(d.front(), Some(&99));
-        assert_eq!(d.back(), Some(&3));
+        assert_eq!(d.front(), Some(&0));
+        assert_eq!(d.back(), Some(&9));
+        assert_eq!(d.len(), 10);
     }
 
+    // ─── clear ────────────────────────────────────────────────────────────────
     #[test]
-    fn test_deque_spill_trigger_on_insert() {
-        // Test that `insert` triggers spill because stack doesn't support random insert efficiently
+    fn test_deque_stack_ops_clear() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        d.clear();
+        assert!(d.is_empty());
+        assert!(d.is_on_stack());
+        // Reusable after clear
+        d.push_back(3);
+        assert_eq!(d.pop_front(), Some(3));
+    }
+
+    // ─── get / as_slices ─────────────────────────────────────────────────────
+    #[test]
+    fn test_deque_stack_ops_get() {
         let mut d: SmallDeque<i32, 4> = SmallDeque::new();
         d.push_back(10);
         d.push_back(20);
-        assert!(d.is_on_stack());
-
-        d.insert(1, 15); // Should spill for safety/simplicity in this impl
-        assert!(!d.is_on_stack());
-        assert_eq!(d.iter().cloned().collect::<Vec<_>>(), vec![10, 15, 20]);
-    }
-
-    #[test]
-    fn test_deque_any_storage_as_slices() {
-        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
-        d.push_back(1);
-        d.push_back(2);
-        // Force wrap-around in ring buffer
-        d.pop_front(); // remove 1
-        d.push_back(3);
-        d.push_back(4);
-        d.push_back(5); // [2, 3, 4, 5] (internally may wrap)
-
-        // Since we pushed 5th, it spilled to heap.
-        // Let's test on stack strictly first:
-        let mut stack_d: SmallDeque<i32, 8> = SmallDeque::new();
-        stack_d.push_back(1);
-        stack_d.push_back(2);
-        stack_d.pop_front();
-        stack_d.push_back(3); // [2, 3]
-
-        let (s1, s2) = stack_d.as_slices();
-        assert_eq!(s1.len() + s2.len(), 2);
-    }
-
-    #[test]
-    fn test_deque_any_storage_drop_behavior() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let counter = Rc::new(RefCell::new(0));
-        struct Dropper(Rc<RefCell<i32>>);
-        impl Drop for Dropper {
-            fn drop(&mut self) {
-                *self.0.borrow_mut() += 1;
-            }
-        }
-
-        {
-            let mut d: SmallDeque<Dropper, 2> = SmallDeque::new();
-            d.push_back(Dropper(counter.clone())); // Stack
-        }
-        assert_eq!(*counter.borrow(), 1);
-
-        *counter.borrow_mut() = 0;
-        {
-            let mut d: SmallDeque<Dropper, 2> = SmallDeque::new();
-            d.push_back(Dropper(counter.clone()));
-            d.push_back(Dropper(counter.clone()));
-            d.push_back(Dropper(counter.clone())); // Spill
-        }
-        assert_eq!(*counter.borrow(), 3);
-    }
-
-    #[test]
-    fn test_deque_any_storage_with_capacity() {
-        let d: SmallDeque<i32, 4> = SmallDeque::with_capacity(2);
-        assert!(d.is_on_stack());
-
-        let d2: SmallDeque<i32, 4> = SmallDeque::with_capacity(10);
-        assert!(!d2.is_on_stack());
-        assert!(d2.capacity() >= 10);
-    }
-
-    #[test]
-    fn test_deque_any_storage_clear_truncate() {
-        let mut d: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 2, 3]);
-        assert!(d.is_on_stack());
-        d.truncate(1);
-        assert_eq!(d.len(), 1);
-        assert_eq!(d.front(), Some(&1));
-
-        d.clear();
-        assert!(d.is_empty());
-
-        // On heap
-        let mut d: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 2, 3, 4, 5]);
-        assert!(!d.is_on_stack());
-        d.truncate(2);
-        assert_eq!(d.len(), 2);
-        d.clear();
-        assert!(d.is_empty());
-    }
-
-    #[test]
-    fn test_deque_any_storage_rotations() {
-        let mut d: SmallDeque<i32, 8> = SmallDeque::from_iter([1, 2, 3, 4]);
-        assert!(d.is_on_stack());
-        d.rotate_left(1); // [2, 3, 4, 1]
-        assert!(!d.is_on_stack()); // Rotation triggers spill
-        assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![2, 3, 4, 1]);
-
-        d.rotate_right(1); // [1, 2, 3, 4]
-        assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_deque_any_storage_mut_accessors() {
-        let mut d: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 2]);
-        if let Some(front) = d.front_mut() {
-            *front = 10;
-        }
-        if let Some(back) = d.back_mut() {
-            *back = 20;
-        }
-        assert_eq!(d.as_slices().0, &[10, 20]);
-
         d.push_back(30);
-        d.push_back(40);
-        d.push_back(50); // Spill
-
-        let slices = d.as_mut_slices();
-        if !slices.0.is_empty() {
-            slices.0[0] = 100;
-        }
-        assert_eq!(d.front(), Some(&100));
+        assert_eq!(d.get(0), Some(&10));
+        assert_eq!(d.get(2), Some(&30));
+        assert_eq!(d.get(99), None);
     }
 
     #[test]
-    fn test_deque_traits_iterators() {
-        let d: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 2, 3]);
-        let mut iter = d.iter();
-        assert_eq!(iter.next(), Some(&1));
-        assert_eq!(iter.next(), Some(&2));
-        assert_eq!(iter.next(), Some(&3));
-        assert_eq!(iter.next(), None);
-
-        let vec: Vec<_> = d.into_iter().collect();
-        assert_eq!(vec, vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn test_deque_traits_interop() {
+    fn test_deque_stack_ops_as_slices_contiguous() {
         let mut d: SmallDeque<i32, 4> = SmallDeque::new();
-        d.extend(vec![1, 2]);
-
-        // Clone
-        let cloned = d.clone();
-        assert_eq!(cloned, d);
-
-        // Debug
-        let debug = format!("{:?}", d);
-        assert!(debug.contains("1"));
-
-        // Default
-        let def: SmallDeque<i32, 4> = SmallDeque::default();
-        assert!(def.is_empty());
-
-        // PartialEq cross capacity
-        let d2: SmallDeque<i32, 8> = SmallDeque::from_iter([1, 2]);
-        assert_eq!(d.len(), d2.len());
-        assert!(d.iter().zip(d2.iter()).all(|(a, b)| a == b));
-    }
-
-    #[test]
-    fn test_deque_any_storage_swap_remove() {
-        let mut d: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 2, 3]);
-        assert_eq!(d.swap_remove_front(1), Some(2));
-        assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![1, 3]);
-
-        let mut d_heap: SmallDeque<i32, 2> = SmallDeque::from_iter([1, 2, 3]);
-        assert_eq!(d_heap.swap_remove_back(1), Some(2));
-        assert_eq!(d_heap.iter().copied().collect::<Vec<_>>(), vec![1, 3]);
-    }
-
-    #[test]
-    fn test_deque_any_storage_gap_coverage() {
-        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
-        // pop empty
-        assert_eq!(d.pop_front(), None);
-        assert_eq!(d.pop_back(), None);
-
-        // heap branches
         d.push_back(1);
         d.push_back(2);
-        d.push_front(0); // Spill
+        let (s1, s2) = d.as_slices();
+        assert_eq!(s1, &[1, 2]);
+        assert!(s2.is_empty());
+    }
+
+    // ─── iter ────────────────────────────────────────────────────────────────
+    #[test]
+    fn test_deque_traits_iter_stack() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        d.push_back(3);
+        // SmallDeque has no .iter(); use as_slices to verify logical order
+        let (s1, s2) = d.as_slices();
+        let v: Vec<_> = s1.iter().chain(s2.iter()).cloned().collect();
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_deque_traits_into_iter_stack() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        d.push_back(3);
+        // SmallDeque has no IntoIterator; drain via pop_front
+        let mut v = Vec::new();
+        while let Some(x) = d.pop_front() {
+            v.push(x);
+        }
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_deque_traits_into_iter_heap() {
+        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
+        d.extend([1, 2, 3, 4]);
         assert!(!d.is_on_stack());
+        let mut v = Vec::new();
+        while let Some(x) = d.pop_front() {
+            v.push(x);
+        }
+        assert_eq!(v, vec![1, 2, 3, 4]);
+    }
 
-        d.push_back(3); // push_back on heap
-        d.push_front(-1); // push_front on heap
-        assert_eq!(d.len(), 5);
-
-        d.reserve(10); // reserve on heap
-        d.truncate(3); // truncate on heap
-        assert_eq!(d.len(), 3);
-
-        d.rotate_left(1); // rotate on heap
-        d.rotate_right(1);
-        d.make_contiguous(); // make_contiguous on heap
-
-        assert_eq!(d.remove(1), Some(0)); // remove on heap
+    // ─── FromIterator / Extend ────────────────────────────────────────────────
+    #[test]
+    fn test_deque_traits_from_iter_and_extend() {
+        let d: SmallDeque<i32, 4> = vec![1, 2].into_iter().collect();
         assert_eq!(d.len(), 2);
 
-        // Iter size hints
-        let (low, high) = d.iter().size_hint();
-        assert_eq!(low, 2);
-        assert_eq!(high, Some(2));
+        let mut d2: SmallDeque<i32, 4> = SmallDeque::new();
+        d2.extend(vec![10, 20, 30]);
+        assert_eq!(d2.len(), 3);
+    }
 
-        let mut stack_d: SmallDeque<i32, 4> = SmallDeque::new();
-        stack_d.push_back(1);
-        let (s_low, s_high) = stack_d.iter().size_hint();
-        assert_eq!(s_low, 1);
-        assert_eq!(s_high, Some(1));
+    // ─── clone ────────────────────────────────────────────────────────────────
+    #[test]
+    fn test_deque_traits_clone_stack() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::from_iter(vec![1, 2, 3]);
+        let mut cloned = d.clone();
+        d.push_back(4);
+        assert_eq!(d.len(), 4);
+        assert_eq!(cloned.len(), 3);
+        assert_eq!(cloned.pop_front(), Some(1));
+    }
 
-        // swap_remove_front/back error cases (bounds already checked by inner but let's hit them)
-        assert_eq!(stack_d.swap_remove_front(10), None);
-        assert_eq!(stack_d.swap_remove_back(10), None);
+    #[test]
+    fn test_deque_traits_clone_heap() {
+        let d: SmallDeque<i32, 2> = vec![1, 2, 3, 4].into_iter().collect();
+        let cloned = d.clone();
+        assert!(!cloned.is_on_stack());
+        assert_eq!(cloned.len(), 4);
+    }
+
+    // ─── Debug / PartialEq ────────────────────────────────────────────────────
+    #[test]
+    fn test_deque_traits_debug_and_eq() {
+        let d: SmallDeque<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        let d2: SmallDeque<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        assert_eq!(d, d2);
+        let debug = format!("{:?}", d);
+        assert!(debug.contains('1'));
+    }
+
+    // ─── AnyDeque trait dispatch ──────────────────────────────────────────────
+    #[test]
+    fn test_deque_any_deque_trait() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        let any: &mut dyn AnyDeque<i32> = &mut d;
+        any.push_back(10);
+        any.push_front(5);
+        assert_eq!(any.len(), 2);
+        assert!(!any.is_empty());
+        assert_eq!(any.front(), Some(&5));
+        assert_eq!(any.back(), Some(&10));
+        assert_eq!(any.pop_front(), Some(5));
+        any.clear();
+        assert!(any.is_empty());
     }
 }

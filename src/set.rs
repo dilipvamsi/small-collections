@@ -1,3 +1,12 @@
+//! Hash set that lives on the stack and spills to the heap.
+//!
+//! Provides [`SmallSet`] — a zero-overhead wrapper around `SmallMap<T, (), N>` that
+//! inherits automatic stack→heap spill behaviour and full set-algebra operations
+//! (`difference`, `intersection`, `union`, `symmetric_difference`, `is_subset`, …).
+//!
+//! [`AnySet`] is an object-safe trait implemented by `SmallSet`, `HashSet`, and `BTreeSet`
+//! so that set-algebra methods can accept any of these types as the `other` argument.
+
 use crate::map::SmallMap;
 use std::borrow::Borrow;
 use std::collections::{BTreeSet, HashSet};

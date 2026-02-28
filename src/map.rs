@@ -1,3 +1,12 @@
+//! Hash map that lives on the stack and spills to the heap.
+//!
+//! Provides [`SmallMap`] — backed by a `heapless::FnvIndexMap` on the stack (power-of-two
+//! capacity `N`) and a `hashbrown::HashMap` on the heap.  Both sides use FNV hashing for
+//! consistent, low-latency performance.
+//!
+//! [`AnyMap`] is an object-safe trait abstracting over `SmallMap`, `HashMap`, and `OrderMap`.
+//! [`SmallMapEntry`] mirrors the standard `Entry` API for in-place mutation.
+
 use core::mem::ManuallyDrop;
 use core::ptr;
 use std::borrow::Borrow;

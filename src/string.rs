@@ -1,3 +1,13 @@
+//! UTF-8 string that lives on the stack and spills to the heap.
+//!
+//! Provides [`SmallString`] — backed by `heapless::String<N>` (stack) and
+//! `std::string::String` (heap).  Spill uses `from_utf8_unchecked` to skip a redundant
+//! UTF-8 scan since both sources already guarantee valid UTF-8, giving a memcpy-only
+//! migration cost.
+//!
+//! Implements `Deref<Target = str>` so all `&str` methods are available directly.
+//! [`AnyString`] provides an object-safe trait over both backends.
+
 use core::mem::ManuallyDrop;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -137,13 +147,14 @@ impl<const N: usize> SmallString<N> {
         str
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
     // --- Core Operations ---
 
+    #[inline(always)]
     pub fn push(&mut self, ch: char) {
         unsafe {
             if self.on_stack {
@@ -169,6 +180,7 @@ impl<const N: usize> SmallString<N> {
         }
     }
 
+    #[inline(always)]
     pub fn push_str(&mut self, s: &str) {
         unsafe {
             if self.on_stack {
@@ -191,6 +203,7 @@ impl<const N: usize> SmallString<N> {
         }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         // We can use the Deref trait here for simplicity,
         // but explicit access is slightly faster in debug builds.
@@ -203,10 +216,12 @@ impl<const N: usize> SmallString<N> {
         }
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn clear(&mut self) {
         unsafe {
             if self.on_stack {
@@ -315,7 +330,7 @@ impl<const N: usize> SmallString<N> {
     /// Extracts a string slice containing the entire `SmallString`.
     ///
     /// Equivalent to `&s[..]`.
-    #[inline]
+    #[inline(always)]
     pub fn as_str(&self) -> &str {
         // We can leverage the Deref trait we already wrote
         &**self
@@ -324,14 +339,14 @@ impl<const N: usize> SmallString<N> {
     /// Extracts a mutable string slice containing the entire `SmallString`.
     ///
     /// Equivalent to `&mut s[..]`.
-    #[inline]
+    #[inline(always)]
     pub fn as_mut_str(&mut self) -> &mut str {
         // Leverage DerefMut
         &mut **self
     }
 
     /// Converts a `SmallString` into a byte slice.
-    #[inline]
+    #[inline(always)]
     pub fn as_bytes(&self) -> &[u8] {
         self.as_str().as_bytes()
     }
@@ -341,7 +356,7 @@ impl<const N: usize> SmallString<N> {
     /// # Safety
     /// The caller must ensure that the content of the slice remains valid UTF-8.
     /// If this invariant is violated, it is Undefined Behavior.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
         unsafe { self.as_mut_str().as_bytes_mut() }
     }
@@ -554,6 +569,7 @@ impl<'a, const N: usize> Extend<&'a str> for SmallString<N> {
 impl<const N: usize> SmallString<N> {
     /// Removes the last character from the string buffer and returns it.
     /// Returns None if the string is empty.
+    #[inline(always)]
     pub fn pop(&mut self) -> Option<char> {
         unsafe {
             if self.on_stack {
@@ -567,6 +583,7 @@ impl<const N: usize> SmallString<N> {
     /// Shortens this String to the specified length.
     /// If new_len >= current length, this does nothing.
     /// Panics if new_len does not lie on a char boundary.
+    #[inline(always)]
     pub fn truncate(&mut self, new_len: usize) {
         unsafe {
             if self.on_stack {
@@ -578,6 +595,7 @@ impl<const N: usize> SmallString<N> {
     }
 
     /// Returns the total capacity (in bytes) of the string.
+    #[inline(always)]
     pub fn capacity(&self) -> usize {
         unsafe {
             if self.on_stack {
@@ -594,6 +612,7 @@ impl<const N: usize> SmallString<N> {
 impl<const N: usize> SmallString<N> {
     /// Ensures that this string has at least the specified capacity.
     /// If the request exceeds N, this forces a spill to the heap immediately.
+    #[inline(always)]
     pub fn reserve(&mut self, additional: usize) {
         unsafe {
             if self.on_stack {

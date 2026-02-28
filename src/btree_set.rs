@@ -1,10 +1,24 @@
+//! Sorted set that lives on the stack and spills to the heap.
+//!
+//! [`SmallBTreeSet`] is a thin wrapper around `SmallBTreeMap<T, (), N>`,
+//! inheriting all the sorted-order guarantees and the stack→heap spill protocol.
+
 use crate::btree_map::SmallBTreeMap;
 use crate::set::AnySet;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::iter::FromIterator;
 
-/// A sorted set that lives on the stack for `N` items, then spills to the heap.
+/// A sorted set that lives on the stack for up to `N` elements, then spills to the heap.
+///
+/// Implemented as a zero-overhead wrapper around `SmallBTreeMap<T, (), N>` so that `()`
+/// zero-sized values add no memory cost.  All iteration is in ascending key order.
+///
+/// # Generic parameters
+/// | Parameter | Meaning |
+/// |-----------|--------|
+/// | `T` | Element type; must implement `Ord` |
+/// | `N` | Stack capacity — max elements before spill |
 pub struct SmallBTreeSet<T, const N: usize> {
     inner: SmallBTreeMap<T, (), N>,
 }
@@ -20,6 +34,9 @@ where
         }
     }
 
+    /// Creates a new empty set starting on the heap with the given initial capacity.
+    ///
+    /// If `cap <= N` this is equivalent to [`new`](SmallBTreeSet::new).
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: SmallBTreeMap::with_capacity(cap),

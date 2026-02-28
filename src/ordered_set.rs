@@ -1,3 +1,10 @@
+#![cfg(feature = "ordered")]
+//! Insertion-order-preserving set that lives on the stack and spills to the heap.
+//!
+//! [`SmallOrderedSet`] is a thin wrapper around `SmallOrderedMap<T, (), N>`, inheriting
+//! the insertion-order-preserving semantics and the stack→heap spill protocol defined
+//! in [`ordered_map`](crate::ordered_map).
+
 use crate::ordered_map::SmallOrderedMap;
 use crate::set::AnySet;
 use std::borrow::Borrow;
@@ -5,13 +12,23 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter::FromIterator;
 
-/// An ordered set that lives on the stack for `N` items, then automatically spills to the heap.
+/// An insertion-order-preserving set that lives on the stack for up to `N` elements,
+/// then spills to a heap-backed `ordermap::OrderMap`.
 ///
-/// # Overview
-/// This set is a wrapper around `SmallOrderedMap<T, (), N>`. Since `()` is zero-sized,
-/// this has no memory overhead compared to a raw set.
-/// Insertion order is preserved across both stack and heap storage.
-pub struct SmallOrderedSet<T, const N: usize> {
+/// Implemented as a zero-overhead wrapper around `SmallOrderedMap<T, (), N>` so `()`
+/// zero-sized values add no memory cost.
+///
+/// # Generic parameters
+/// | Parameter | Meaning |
+/// |-----------|--------|
+/// | `T` | Element type; must implement `Eq + Hash` |
+/// | `N` | Stack capacity — max elements before spill |
+///
+/// # Design Consideration
+/// - **Insertion order**: unlike `SmallSet` which uses an unordered `FnvIndexMap` on the
+///   stack, this type also preserves insertion order after spill via `OrderMap`.
+///   The trade-off is O(N) lookup on the stack (linear scan) vs. O(1) for `SmallSet`.
+pub struct SmallOrderedSet<T: Eq + Hash, const N: usize> {
     map: SmallOrderedMap<T, (), N>,
 }
 

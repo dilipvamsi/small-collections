@@ -1,29 +1,48 @@
+//! Sorted map that lives on the stack and spills to the heap.
+//!
+//! This module provides [`SmallBTreeMap`] — a map that stores up to `N` entries
+//! in a stack-allocated sorted vector ([`HeaplessBTreeMap`]) and transparently
+//! migrates to a `std::collections::BTreeMap` when the stack overflows.
+//!
+//! [`AnyBTreeMap`] is an object-safe trait that unifies both storage backends.
+
 use core::borrow::Borrow;
-use core::cmp::Ordering;
 use core::mem::ManuallyDrop;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::iter::FromIterator;
 
-/// A trait for abstraction over different B-Tree map types (Stack, Heap, Small).
+use crate::heapless_btree_map::{Entry, HeaplessBTreeMap};
+
+/// An object-safe abstraction over B-Tree map types.
+///
+/// Implemented by `BTreeMap<K, V>` (heap) and `SmallBTreeMap<K, V, N>` (small/stack) so
+/// that callers can write backend-agnostic code.
 pub trait AnyBTreeMap<K, V> {
+    /// Returns the number of key-value pairs.
     fn len(&self) -> usize;
+    /// Returns `true` if the map is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Inserts `(key, value)`, returning the previous value if the key existed.
     fn insert(&mut self, key: K, value: V) -> Option<V>;
+    /// Returns a shared reference to the value for `key`, or `None`.
     fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
+    /// Returns an exclusive reference to the value for `key`, or `None`.
     fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
+    /// Removes and returns the value for `key`, or `None` if absent.
     fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
+    /// Removes all entries.
     fn clear(&mut self);
 }
 
@@ -60,39 +79,37 @@ impl<K: Ord, V> AnyBTreeMap<K, V> for BTreeMap<K, V> {
     }
 }
 
-// Change 1: Use heapless::Vec instead of SortedLinkedList
-use heapless::Vec as HeaplessVec;
-
-#[derive(Debug, Clone)]
-pub struct Entry<K, V>(pub K, pub V);
-
-// Implement Ord/Eq based ONLY on the Key to keep the vector sorted
-impl<K: PartialEq, V> PartialEq for Entry<K, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq(&other.0)
-    }
-}
-impl<K: Eq, V> Eq for Entry<K, V> {}
-impl<K: PartialOrd, V> PartialOrd for Entry<K, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
-    }
-}
-impl<K: Ord, V> Ord for Entry<K, V> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
-/// A B-Tree map that lives on the stack for `N` items, then spills to the heap.
+/// A sorted map that lives on the stack for up to `N` entries, then spills to the heap.
 ///
-/// # Overview
-/// This collection uses a sorted `heapless::Vec` for stack storage and a
-/// `std::collections::BTreeMap` for heap storage.
+/// # Storage strategy
+/// Uses a tagged union ([`MapData`]) with:
+/// - **Stack side**: [`HeaplessBTreeMap<K, V, N>`] — a sorted `heapless::Vec`.
+/// - **Heap side**: `std::collections::BTreeMap<K, V>`.
+///
+/// Once a spill occurs the struct permanently uses the heap side.
+///
+/// # Overflow protocol
+/// When [`insert`](SmallBTreeMap::insert) is called on a full stack map with a new key,
+/// `spill_to_heap` migrates all entries to a `BTreeMap` and then re-inserts the new pair.
+///
+/// # Generic parameters
+/// | Parameter | Meaning |
+/// |-----------|--------|
+/// | `K` | Key type; must implement `Ord` |
+/// | `V` | Value type |
+/// | `N` | Stack capacity — max entries before spill |
+///
+/// # Design Considerations
+/// - **`len` tracked separately**: instead of accessing the union variant to call `.len()`,
+///   the length is cached in a plain `usize` field so `len()` never touches unsafe code.
+/// - **Sorted iteration**: the stack-side sorted order is preserved during spill, so
+///   `BTreeMap`'s sorted iteration invariant is maintained without re-sorting.
+/// - **`Entry` API**: the `entry` method (in `map.rs` / `SmallMap`) can be layered on top;
+///   this struct deliberately keeps its API minimal.
 ///
 /// # Safety
-/// * `on_stack` tag determines which side of the `MapData` union is active.
-/// * `len` is tracked manually to avoid redundant union accesses.
+/// `on_stack` determines which variant of `MapData` is active. Only that variant
+/// may be accessed. All unsafe union accesses must first check `on_stack`.
 pub struct SmallBTreeMap<K, V, const N: usize> {
     on_stack: bool,
     len: usize,
@@ -137,7 +154,7 @@ impl<K: Ord, V, const N: usize> AnyBTreeMap<K, V> for SmallBTreeMap<K, V, N> {
 /// We use `ManuallyDrop` because the compiler cannot know which field is active
 /// and therefore cannot automatically drop the correct one.
 union MapData<K, V, const N: usize> {
-    stack: ManuallyDrop<HeaplessVec<Entry<K, V>, N>>,
+    stack: ManuallyDrop<HeaplessBTreeMap<K, V, N>>,
     heap: ManuallyDrop<BTreeMap<K, V>>,
 }
 
@@ -159,7 +176,7 @@ where
             on_stack: true,
             len: 0,
             data: MapData {
-                stack: ManuallyDrop::new(HeaplessVec::new()),
+                stack: ManuallyDrop::new(HeaplessBTreeMap::new()),
             },
         }
     }
@@ -171,7 +188,7 @@ where
             Self {
                 on_stack: false,
                 len: 0,
-                data: MapData {
+                data: MapData::<K, V, N> {
                     heap: ManuallyDrop::new(BTreeMap::new()),
                 },
             }
@@ -205,24 +222,22 @@ where
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         unsafe {
             if self.on_stack {
-                // Change 3: Binary Search for O(log N) lookup
                 let stack = &mut *self.data.stack;
-                match stack.binary_search_by(|e| e.0.cmp(&key)) {
-                    Ok(idx) => {
-                        // Key exists: Update in place
-                        return Some(core::mem::replace(&mut stack[idx].1, value));
-                    }
-                    Err(idx) => {
-                        // Key not found: 'idx' is the correct insertion point
-                        if stack.is_full() {
-                            self.spill_to_heap();
-                            // Fallthrough to heap insert below
-                        } else {
-                            // Insert at specific index to maintain sort order
-                            stack.insert(idx, Entry(key, value)).ok().unwrap();
+                match stack.insert(key, value) {
+                    Ok(old) => {
+                        if old.is_none() {
                             self.len += 1;
-                            return None;
                         }
+                        return old;
+                    }
+                    Err((k, v)) => {
+                        // Stack is full: spill, then insert into heap with the returned k/v.
+                        self.spill_to_heap();
+                        let old = (*self.data.heap).insert(k, v);
+                        if old.is_none() {
+                            self.len += 1;
+                        }
+                        return old;
                     }
                 }
             }
@@ -243,11 +258,7 @@ where
     {
         unsafe {
             if self.on_stack {
-                let stack = &*self.data.stack;
-                match stack.binary_search_by(|e| e.0.borrow().cmp(key)) {
-                    Ok(idx) => Some(&stack[idx].1),
-                    Err(_) => None,
-                }
+                self.data.stack.get(key)
             } else {
                 (*self.data.heap).get(key)
             }
@@ -261,12 +272,7 @@ where
     {
         unsafe {
             if self.on_stack {
-                let stack = &mut *self.data.stack;
-                match stack.binary_search_by(|e| e.0.borrow().cmp(key)) {
-                    // Change 4: Safe mutable reference return (Vec doesn't move items on access)
-                    Ok(idx) => Some(&mut stack[idx].1),
-                    Err(_) => None,
-                }
+                (*self.data.stack).get_mut(key)
             } else {
                 (*self.data.heap).get_mut(key)
             }
@@ -280,14 +286,11 @@ where
     {
         unsafe {
             if self.on_stack {
-                let stack = &mut *self.data.stack;
-                match stack.binary_search_by(|e| e.0.borrow().cmp(key)) {
-                    Ok(idx) => {
-                        self.len -= 1;
-                        Some(stack.remove(idx).1)
-                    }
-                    Err(_) => None,
+                let old = (*self.data.stack).remove(key);
+                if old.is_some() {
+                    self.len -= 1;
                 }
+                old
             } else {
                 let old = (*self.data.heap).remove(key);
                 if old.is_some() {
@@ -298,16 +301,14 @@ where
         }
     }
 
-    // Change 5: Fixed Miri/unsafe issues with spill_to_heap
     #[inline(never)]
     unsafe fn spill_to_heap(&mut self) {
         unsafe {
             let mut heap = BTreeMap::new();
-            // ManuallyDrop::take effectively copies the bits out and leaves the union "empty"
-            // This is safe because we immediately overwrite it with the heap variant.
-            let stack_vec = ManuallyDrop::take(&mut self.data.stack);
+            // ManuallyDrop::take copies the bits out; safe because we immediately overwrite.
+            let stack_map = ManuallyDrop::take(&mut self.data.stack);
 
-            for entry in stack_vec {
+            for entry in stack_map {
                 heap.insert(entry.0, entry.1);
             }
 
@@ -319,7 +320,7 @@ where
     pub fn iter(&self) -> Iter<'_, K, V> {
         unsafe {
             if self.on_stack {
-                Iter::Stack((*self.data.stack).iter())
+                Iter::Stack(self.data.stack.iter())
             } else {
                 Iter::Heap((*self.data.heap).iter())
             }
@@ -327,7 +328,6 @@ where
     }
 }
 
-// Change 6: Simplified Iterator wrapper (uses Slice Iter)
 pub enum Iter<'a, K: Ord, V> {
     Stack(core::slice::Iter<'a, Entry<K, V>>),
     Heap(std::collections::btree_map::Iter<'a, K, V>),
@@ -343,28 +343,31 @@ impl<'a, K: Ord, V> Iterator for Iter<'a, K, V> {
     }
 }
 
-pub struct IntoIter<K, V, const N: usize> {
-    on_stack: bool,
-    stack: HeaplessVec<Entry<K, V>, N>,
-    heap: BTreeMap<K, V>,
+/// Convenience alias used by `SmallBTreeSet`.
+pub type IntoIter<K, V, const N: usize> = SmallBTreeMapIntoIter<K, V, N>;
+
+pub struct HeaplessBTreeMapIntoIter<K, V, const N: usize> {
+    inner: heapless::vec::IntoIter<Entry<K, V>, N, usize>,
 }
 
-impl<K, V, const N: usize> Iterator for IntoIter<K, V, N>
-where
-    K: Ord,
-{
+impl<K: Ord, V, const N: usize> Iterator for HeaplessBTreeMapIntoIter<K, V, N> {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.on_stack {
-            if !self.stack.is_empty() {
-                // Remove from front (efficient enough for small N)
-                let entry = self.stack.remove(0);
-                Some((entry.0, entry.1))
-            } else {
-                None
-            }
-        } else {
-            self.heap.pop_first()
+        self.inner.next().map(|e| (e.0, e.1))
+    }
+}
+
+pub enum SmallBTreeMapIntoIter<K, V, const N: usize> {
+    Stack(HeaplessBTreeMapIntoIter<K, V, N>),
+    Heap(std::collections::btree_map::IntoIter<K, V>),
+}
+
+impl<K: Ord, V, const N: usize> Iterator for SmallBTreeMapIntoIter<K, V, N> {
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            SmallBTreeMapIntoIter::Stack(i) => i.next(),
+            SmallBTreeMapIntoIter::Heap(i) => i.next(),
         }
     }
 }
@@ -374,24 +377,18 @@ where
     K: Ord,
 {
     type Item = (K, V);
-    type IntoIter = IntoIter<K, V, N>;
+    type IntoIter = SmallBTreeMapIntoIter<K, V, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         let mut this = ManuallyDrop::new(self);
         unsafe {
             if this.on_stack {
-                IntoIter {
-                    on_stack: true,
-                    // Safe move out of union
-                    stack: ManuallyDrop::take(&mut this.data.stack),
-                    heap: BTreeMap::new(),
-                }
+                SmallBTreeMapIntoIter::Stack(HeaplessBTreeMapIntoIter {
+                    inner: ManuallyDrop::<HeaplessBTreeMap<K, V, N>>::take(&mut this.data.stack)
+                        .into_iter(),
+                })
             } else {
-                IntoIter {
-                    on_stack: false,
-                    stack: HeaplessVec::new(),
-                    heap: ManuallyDrop::take(&mut this.data.heap),
-                }
+                SmallBTreeMapIntoIter::Heap(ManuallyDrop::take(&mut this.data.heap).into_iter())
             }
         }
     }
@@ -421,7 +418,6 @@ where
                     on_stack: true,
                     len: self.len,
                     data: MapData {
-                        // Vec implements Clone, so this is easy now
                         stack: ManuallyDrop::new((*self.data.stack).clone()),
                     },
                 }
@@ -502,6 +498,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cmp::Ordering;
 
     #[test]
     fn test_btree_stack_ops_sorted_order() {

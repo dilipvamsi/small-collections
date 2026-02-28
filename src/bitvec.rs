@@ -1,3 +1,10 @@
+#![cfg(feature = "bitvec")]
+//! Bit vector that lives on the stack and spills to the heap.
+//!
+//! Provides [`SmallBitVec`] — backed by [`HeaplessBitVec`] on the stack and
+//! `bitvec::prelude::BitVec` on the heap.  [`AnyBitVec`] is the object-safe
+//! inspection trait implemented by both.
+
 use crate::HeaplessBitVec;
 use bitvec::prelude::{BitOrder, BitVec, Lsb0};
 use core::mem::ManuallyDrop;
@@ -26,15 +33,27 @@ impl<O: BitOrder> AnyBitVec for BitVec<u8, O> {
     }
 }
 
-/// A bit vector that lives on the stack for `N` bytes, then spills to the heap.
+/// A bit vector that lives on the stack for `N * 8` bits, then spills to a heap
+/// `bitvec::BitVec`.
 ///
-/// # Overview
-/// This collection provides bit-level storage with stack optimization.
-/// It uses `HeaplessBitVec` for stack storage and `bitvec::page::BitVec` for heap.
+/// # Capacity
+/// `N` is measured in **bytes**; total bit capacity is `N * 8`.
+///
+/// # Generic parameters
+/// | Parameter | Meaning |
+/// |-----------|--------|
+/// | `N` | Stack capacity in bytes |
+/// | `O` | Bit ordering within each byte; defaults to `Lsb0` |
+///
+/// # Design Considerations
+/// - **Byte-granular storage**: bits are packed into `u8` bytes by `HeaplessBitVec`.
+///   Spill copies them directly into a `BitVec<u8, O>`, keeping the same byte layout.
+/// - **`on_stack` tag**: the `BitData` union is discriminated by `on_stack`, just like
+///   all other `Small*` types in this crate.
 ///
 /// # Safety
-/// * `on_stack` tag determines which side of the `BitData` union is active.
-/// * `ManuallyDrop` is used to manage union variant destruction.
+/// `on_stack` determines which variant of `BitData` is active.  Only the active
+/// variant may be accessed.
 pub struct SmallBitVec<const N: usize, O: BitOrder = Lsb0> {
     on_stack: bool,
     data: BitData<N, O>,
@@ -54,6 +73,12 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
     /// `N` represents **BYTES**.
     /// Stack bit capacity = `N * 8`.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= 16 * 1024,
+                "SmallBitVec is too large! Reduce N."
+            );
+        }
         Self {
             on_stack: true,
             data: BitData {
@@ -62,6 +87,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         unsafe {
             if self.on_stack {
@@ -72,14 +98,17 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    #[inline(always)]
     pub fn push(&mut self, value: bool) {
         unsafe {
             if self.on_stack {
@@ -96,6 +125,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    #[inline(always)]
     pub fn pop(&mut self) -> Option<bool> {
         unsafe {
             if self.on_stack {
@@ -106,6 +136,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    #[inline(always)]
     pub fn get(&self, index: usize) -> Option<bool> {
         unsafe {
             if self.on_stack {
@@ -116,6 +147,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    #[inline(always)]
     pub fn set(&mut self, index: usize, value: bool) {
         unsafe {
             if self.on_stack {
