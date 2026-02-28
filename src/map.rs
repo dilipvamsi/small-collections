@@ -6,6 +6,112 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
 
+/// A trait for abstraction over different map types (Stack, Heap, Small).
+pub trait AnyMap<K, V> {
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V>;
+    fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized;
+    fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized;
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized;
+    fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized;
+    fn clear(&mut self);
+}
+
+impl<K: Eq + Hash, V, S: BuildHasher> AnyMap<K, V> for std::collections::HashMap<K, V, S> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert(key, value)
+    }
+    fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get(key)
+    }
+    fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_mut(key)
+    }
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.remove(key)
+    }
+    fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.contains_key(key)
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+}
+
+impl<K: Eq + Hash, V, S: BuildHasher> AnyMap<K, V> for hashbrown::HashMap<K, V, S> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert(key, value)
+    }
+    fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get(key)
+    }
+    fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_mut(key)
+    }
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.remove(key)
+    }
+    fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.contains_key(key)
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+}
+
 // Use 'hashbrown' directly for the Raw Entry API (allows preventing double-hashing during spill)
 use hashbrown::HashMap;
 // Use 'fnv' to match heapless's internal hasher for consistent performance
@@ -33,6 +139,46 @@ pub struct SmallMap<K, V, const N: usize> {
 
     /// The storage union. Only one field is active at a time.
     data: MapData<K, V, N>,
+}
+
+impl<K: Eq + Hash, V, const N: usize> AnyMap<K, V> for SmallMap<K, V, N> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert(key, value)
+    }
+    fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get(key)
+    }
+    fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_mut(key)
+    }
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.remove(key)
+    }
+    fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.contains_key(key)
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
 }
 
 /// Internal storage union.
@@ -584,7 +730,7 @@ mod tests {
 
     // --- Basic Stack Operations ---
     #[test]
-    fn test_stack_basic_operations() {
+    fn test_map_stack_ops_basic() {
         let mut map: SmallMap<i32, i32, 4> = SmallMap::new();
 
         assert!(map.is_empty());
@@ -604,7 +750,7 @@ mod tests {
 
     // --- The Critical Spill Test ---
     #[test]
-    fn test_spill_trigger_and_persistence() {
+    fn test_map_spill_trigger_on_insert() {
         // Capacity is strictly 2
         let mut map: SmallMap<String, String, 2> = SmallMap::new();
 
@@ -630,7 +776,7 @@ mod tests {
 
     // --- Heap Operations (Post-Spill) ---
     #[test]
-    fn test_heap_operations() {
+    fn test_map_any_storage_heap_ops() {
         let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
 
         // Fill and Spill
@@ -650,7 +796,7 @@ mod tests {
 
     // --- Overwriting Values ---
     #[test]
-    fn test_overwrite() {
+    fn test_map_any_storage_overwrite() {
         let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
 
         // Stack Overwrite
@@ -669,7 +815,7 @@ mod tests {
 
     // --- Entry API: Basic & Modify ---
     #[test]
-    fn test_entry_api_basic() {
+    fn test_map_any_storage_entry_api_basic() {
         let mut map: SmallMap<&str, i32, 4> = SmallMap::new();
 
         // or_insert (New Key)
@@ -687,7 +833,7 @@ mod tests {
 
     // --- Entry API: Spill Edge Case ---
     #[test]
-    fn test_entry_spill() {
+    fn test_map_spill_trigger_on_entry() {
         let mut map: SmallMap<&str, i32, 2> = SmallMap::new();
         map.insert("A", 1);
         map.insert("B", 2);
@@ -704,7 +850,7 @@ mod tests {
 
     // --- Iterators & Traits ---
     #[test]
-    fn test_iterators_and_traits() {
+    fn test_map_traits_iterators() {
         let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
         map.insert(1, 10);
         map.insert(2, 20);
@@ -733,7 +879,7 @@ mod tests {
 
     // --- Minimum valid size is 2 Edge Case ---
     #[test]
-    fn test_minimum_capacity() {
+    fn test_map_stack_minimum_capacity() {
         // heapless requires N >= 2 and Power of Two
         // This test ensures the library handles the smallest possible stack size correctly
         let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
@@ -748,7 +894,7 @@ mod tests {
 
     // --- Clear Operation ---
     #[test]
-    fn test_clear() {
+    fn test_map_any_storage_clear() {
         let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
 
         // Clear Stack
@@ -767,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_size_guard_allows_valid_sizes() {
+    fn test_map_static_size_guard() {
         // 1. Small Map (Standard use case)
         let _small: SmallMap<i32, i32, 4> = SmallMap::new();
 
@@ -782,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn test_index_read() {
+    fn test_map_traits_index_read() {
         let mut map: SmallMap<i32, i32, 4> = SmallMap::new();
         map.insert(1, 10);
         map.insert(2, 20);
@@ -793,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn test_index_assign() {
+    fn test_map_traits_index_assign() {
         let mut map: SmallMap<&str, i32, 4> = SmallMap::new();
         map.insert("A", 10);
 
@@ -805,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn test_index_borrowing() {
+    fn test_map_traits_index_borrowing() {
         // Demonstrate using &str to index a Map<String, _>
         let mut map: SmallMap<String, i32, 4> = SmallMap::new();
         map.insert("Apple".to_string(), 100);
@@ -820,24 +966,64 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "no entry found for key")]
-    fn test_index_panic_on_missing() {
+    fn test_map_traits_index_panic() {
         let map: SmallMap<i32, i32, 4> = SmallMap::new();
         // This should panic
         let _val = map[&999];
     }
 
     #[test]
-    fn test_map_clone() {
-        let mut map: SmallMap<String, i32, 4> = SmallMap::new();
-        map.insert("A".to_string(), 1);
+    fn test_map_any_storage_heap_manipulation() {
+        let mut map: SmallMap<i32, i32, 2> = vec![(1, 10), (2, 20), (3, 30)].into_iter().collect();
+        assert!(!map.is_on_stack());
 
-        // This requires the impl Clone above
-        let mut clone = map.clone();
-        clone.insert("B".to_string(), 2);
+        // heap get_mut
+        if let Some(v) = map.get_mut(&1) {
+            *v = 11;
+        }
+        assert_eq!(map[&1], 11);
 
-        // Verify independence
-        assert_eq!(map.len(), 1);
-        assert_eq!(clone.len(), 2);
-        assert_eq!(clone.get("A"), Some(&1));
+        // heap remove
+        assert_eq!(map.remove(&2), Some(20));
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn test_map_any_storage_clone_heap() {
+        let map: SmallMap<i32, i32, 2> = vec![(1, 10), (2, 20), (3, 30)].into_iter().collect();
+        let cloned = map.clone();
+        assert_eq!(cloned.len(), 3);
+        assert!(!cloned.is_on_stack());
+    }
+
+    #[test]
+    fn test_map_traits_debug_display() {
+        let map: SmallMap<i32, i32, 2> = vec![(1, 11)].into_iter().collect();
+        let debug = format!("{:?}", map);
+        assert!(debug.contains("1: 11"));
+    }
+
+    #[test]
+    fn test_map_traits_entry_or_insert_with() {
+        let mut map2: SmallMap<i32, i32, 4> = SmallMap::new();
+        map2.entry(1).or_insert_with(|| 100);
+        assert_eq!(map2[&1], 100);
+
+        // heap entry or_insert_with
+        let mut map_h: SmallMap<i32, i32, 2> = vec![(1, 1), (2, 2), (3, 3)].into_iter().collect();
+        map_h.entry(4).or_insert_with(|| 400);
+        assert_eq!(map_h[&4], 400);
+    }
+
+    #[test]
+    fn test_map_traits_entry_key() {
+        let mut map3: SmallMap<i32, i32, 4> = SmallMap::new();
+        let entry = map3.entry(1);
+        assert_eq!(entry.key(), &1);
+        entry.or_insert(10);
+
+        let mut map4: SmallMap<i32, i32, 2> = vec![(1, 1), (2, 2), (3, 3)].into_iter().collect();
+        let entry_h = map4.entry(5);
+        assert_eq!(entry_h.key(), &5);
     }
 }

@@ -414,7 +414,7 @@ mod tests {
 
     // --- 1. Basic CRUD & Stack Behavior ---
     #[test]
-    fn test_basic_crud_stack() {
+    fn test_set_stack_ops_basic() {
         let mut set: SmallSet<i32, 4> = SmallSet::new();
 
         assert!(set.is_empty());
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicates_handling() {
+    fn test_set_stack_duplicate_insertion() {
         let mut set: SmallSet<String, 4> = SmallSet::new();
 
         assert!(set.insert("A".to_string()));
@@ -455,7 +455,7 @@ mod tests {
 
     // --- 2. Spill Logic (The Critical Test) ---
     #[test]
-    fn test_spill_threshold() {
+    fn test_set_spill_trigger_on_insert() {
         // N = 2. Should hold 2 items on stack. 3rd item triggers spill.
         let mut set: SmallSet<i32, 2> = SmallSet::new();
 
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn test_heap_growth() {
+    fn test_set_any_storage_growth_on_heap() {
         let mut set: SmallSet<i32, 2> = SmallSet::new();
 
         // Push well past stack capacity
@@ -489,7 +489,7 @@ mod tests {
 
     // --- 3. Iterators ---
     #[test]
-    fn test_iter() {
+    fn test_set_traits_iter() {
         let set: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let collected: Vec<_> = set.iter().cloned().collect(); // Arbitrary order
 
@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_into_iter_stack() {
+    fn test_set_stack_into_iter() {
         let mut set: SmallSet<i32, 4> = SmallSet::new();
         set.insert(1);
         set.insert(2);
@@ -513,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn test_into_iter_heap() {
+    fn test_set_any_storage_into_iter_heap() {
         let mut set: SmallSet<i32, 2> = SmallSet::new();
         set.insert(1);
         set.insert(2);
@@ -527,7 +527,7 @@ mod tests {
 
     // --- 4. Set Algebra (Difference, Union, Intersection) ---
     #[test]
-    fn test_difference() {
+    fn test_set_any_set_difference() {
         let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![3, 4, 5].into_iter().collect();
 
@@ -540,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn test_intersection() {
+    fn test_set_any_set_intersection() {
         let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![2, 3, 4].into_iter().collect();
 
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn test_union() {
+    fn test_set_any_set_union() {
         let a: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![2, 3].into_iter().collect();
 
@@ -568,7 +568,7 @@ mod tests {
 
     // --- 5. Boolean Logic (Subset, Disjoint) ---
     #[test]
-    fn test_is_disjoint() {
+    fn test_set_any_set_disjoint() {
         let a: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![3, 4].into_iter().collect();
         let c: SmallSet<i32, 4> = vec![2, 3].into_iter().collect();
@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_subset() {
+    fn test_set_any_set_subset() {
         let sub: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
         let sup: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
 
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_superset() {
+    fn test_set_any_set_superset() {
         let sup: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let sub_vec = vec![1, 2];
 
@@ -601,7 +601,7 @@ mod tests {
 
     // --- 6. Interoperability (Std Sets) ---
     #[test]
-    fn test_interop_hashset() {
+    fn test_set_traits_interop_hashset() {
         let small: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
         let std_set: HashSet<i32> = vec![1, 2, 3].into_iter().collect();
 
@@ -613,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interop_btreeset() {
+    fn test_set_traits_interop_btreeset() {
         let small: SmallSet<i32, 4> = vec![1, 2].into_iter().collect();
         let btree: BTreeSet<i32> = vec![2, 3].into_iter().collect();
 
@@ -624,7 +624,7 @@ mod tests {
 
     // --- 7. Retain (Filter) ---
     #[test]
-    fn test_retain() {
+    fn test_set_any_storage_retain() {
         let mut set: SmallSet<i32, 4> = vec![1, 2, 3, 4, 5].into_iter().collect();
         // Should spill (5 > 4)
         assert!(!set.is_on_stack());
@@ -639,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn test_symmetric_difference() {
+    fn test_set_any_set_symmetric_difference() {
         let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![3, 4, 5].into_iter().collect();
 
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn test_equality() {
+    fn test_set_traits_equality() {
         let a: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
         let b: SmallSet<i32, 4> = vec![3, 2, 1].into_iter().collect(); // Different insertion order
         let c: SmallSet<i32, 2> = vec![1, 2].into_iter().collect();
@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extend() {
+    fn test_set_traits_extend() {
         let mut set: SmallSet<i32, 4> = SmallSet::new();
         set.insert(1);
 
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clone() {
+    fn test_set_traits_clone() {
         let mut a: SmallSet<i32, 4> = SmallSet::new();
         a.insert(1);
 
@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn test_set_clone() {
+    fn test_set_any_storage_clone_heap() {
         let mut original: SmallSet<String, 4> = SmallSet::new();
         original.insert("A".to_string());
         original.insert("B".to_string());
@@ -713,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn test_equality_different_capacities() {
+    fn test_set_traits_equality_different_capacities() {
         let mut s1: SmallSet<i32, 4> = SmallSet::new();
         let mut s2: SmallSet<i32, 8> = SmallSet::new();
 
@@ -732,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn test_equality_interop() {
+    fn test_set_traits_equality_interop() {
         let mut small: SmallSet<i32, 4> = SmallSet::new();
         small.insert(1);
         small.insert(2);
@@ -756,11 +756,34 @@ mod tests {
     }
 
     #[test]
-    fn test_equality_cross_capacity() {
-        // Check SmallSet<4> == SmallSet<8>
-        let s1: SmallSet<i32, 4> = vec![1, 2, 3].into_iter().collect();
-        let s2: SmallSet<i32, 8> = vec![3, 2, 1].into_iter().collect();
+    fn test_set_any_storage_heap_remove() {
+        let mut set: SmallSet<i32, 2> = vec![1, 2, 3].into_iter().collect();
+        assert!(!set.is_on_stack());
+        assert!(set.remove(&2));
+        assert_eq!(set.len(), 2);
+    }
 
-        assert_eq!(s1, s2);
+    #[test]
+    fn test_set_any_storage_clone_heap_v2() {
+        let set: SmallSet<i32, 2> = vec![1, 2, 3].into_iter().collect();
+        let cloned = set.clone();
+        assert_eq!(cloned.len(), 3);
+        assert!(!cloned.is_on_stack());
+    }
+
+    #[test]
+    fn test_set_traits_debug_display() {
+        let set: SmallSet<i32, 2> = vec![1].into_iter().collect();
+        let debug = format!("{:?}", set);
+        assert!(debug.contains("1"));
+    }
+
+    #[test]
+    fn test_set_traits_any_set_impl() {
+        let set: SmallSet<i32, 2> = vec![1, 2].into_iter().collect();
+        let any: &dyn AnySet<i32> = &set;
+        assert_eq!(any.len(), 2);
+        assert!(any.contains(&1));
+        assert!(!any.is_empty());
     }
 }

@@ -5,11 +5,87 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 
+/// A trait for abstraction over different string types (Stack, Heap, Small).
+pub trait AnyString {
+    fn as_str(&self) -> &str;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn push_str(&mut self, s: &str);
+    fn push(&mut self, ch: char);
+    fn clear(&mut self);
+    fn pop(&mut self) -> Option<char>;
+    fn truncate(&mut self, new_len: usize);
+}
+
+impl AnyString for String {
+    fn as_str(&self) -> &str {
+        self.as_str()
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn push_str(&mut self, s: &str) {
+        self.push_str(s);
+    }
+    fn push(&mut self, ch: char) {
+        self.push(ch);
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+    fn pop(&mut self) -> Option<char> {
+        self.pop()
+    }
+    fn truncate(&mut self, new_len: usize) {
+        self.truncate(new_len);
+    }
+}
+
+/// A string that lives on the stack for `N` bytes, then spills to the heap.
+///
+/// # Overview
+/// This collection uses a `heapless::String` for stack storage and a
+/// `std::string::String` for heap storage.
+///
+/// # Safety
+/// * `on_stack` tag determines which side of the `StringData` union is active.
+/// * `SmallString` ensures all data remains valid UTF-8 by leveraging the invariants
+///   of the underlying collections and performing manual UTF-8 checks only when necessary.
 pub struct SmallString<const N: usize> {
     on_stack: bool,
     data: StringData<N>,
 }
 
+impl<const N: usize> AnyString for SmallString<N> {
+    fn as_str(&self) -> &str {
+        self.as_str()
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn push_str(&mut self, s: &str) {
+        self.push_str(s);
+    }
+    fn push(&mut self, ch: char) {
+        self.push(ch);
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+    fn pop(&mut self) -> Option<char> {
+        self.pop()
+    }
+    fn truncate(&mut self, new_len: usize) {
+        self.truncate(new_len);
+    }
+}
+
+/// The internal storage for `SmallString`.
+///
+/// We use `ManuallyDrop` because the compiler cannot know which field is active
+/// and therefore cannot automatically drop the correct one.
 union StringData<const N: usize> {
     stack: ManuallyDrop<heapless::String<N>>,
     heap: ManuallyDrop<std::string::String>,
@@ -82,7 +158,10 @@ impl<const N: usize> SmallString<N> {
                     // 3. Guaranteed Success
                     // Since we checked capacity, this push will never fail.
                     // We can safely ignore the Result.
-                    let _ = stack_str.push(ch);
+                    match stack_str.push(ch) {
+                        Ok(()) => return, // Success: exit early
+                        Err(_) => unreachable!("Stack capacity check failed in push"),
+                    }
                 }
             } else {
                 (*self.data.heap).push(ch);
@@ -101,7 +180,10 @@ impl<const N: usize> SmallString<N> {
                     self.spill_to_heap_and_push_str(s);
                 } else {
                     // 3. Guaranteed Success
-                    let _ = stack_str.push_str(s);
+                    match stack_str.push_str(s) {
+                        Ok(()) => return, // Success: exit early
+                        Err(_) => unreachable!("Stack capacity check failed in push str"),
+                    }
                 }
             } else {
                 (*self.data.heap).push_str(s);
@@ -304,6 +386,12 @@ impl<const N: usize> Drop for SmallString<N> {
                 ManuallyDrop::drop(&mut self.data.heap);
             }
         }
+    }
+}
+
+impl<const N: usize> Default for SmallString<N> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -642,7 +730,10 @@ impl<const N: usize> SmallString<N> {
                 let mut temp: heapless::String<N> = heapless::String::new();
                 for c in stack_str.chars() {
                     if f(c) {
-                        let _ = temp.push(c);
+                        match temp.push(c) {
+                            Ok(()) => continue,
+                            Err(_) => unreachable!("temp string capacity check failed in push"),
+                        }
                     }
                 }
                 *stack_str = temp;
@@ -679,7 +770,7 @@ mod tests {
 
     // --- 1. Basic Stack Operations ---
     #[test]
-    fn test_stack_behavior() {
+    fn test_string_stack_ops_basic() {
         let mut s: SmallString<16> = SmallString::new();
 
         assert!(s.is_on_stack());
@@ -699,7 +790,7 @@ mod tests {
 
     // --- 2. Exact Boundary Tests ---
     #[test]
-    fn test_exact_boundary() {
+    fn test_string_spill_trigger_on_exact_capacity() {
         let mut s: SmallString<5> = SmallString::new();
 
         // Fill exactly to capacity
@@ -716,7 +807,7 @@ mod tests {
 
     // --- 3. Spill via push_str (Multi-char) ---
     #[test]
-    fn test_spill_via_push_str() {
+    fn test_string_spill_trigger_on_push_str() {
         let mut s: SmallString<4> = SmallString::new();
         s.push_str("Hi"); // Len 2 (Stack)
 
@@ -730,7 +821,7 @@ mod tests {
 
     // --- 4. Spill via push (Single char) ---
     #[test]
-    fn test_spill_via_push_char() {
+    fn test_string_spill_trigger_on_push_char() {
         let mut s: SmallString<3> = SmallString::new();
         s.push('A');
         s.push('B');
@@ -744,7 +835,7 @@ mod tests {
 
     // --- 5. UTF-8 & Emojis (CRITICAL for unsafe blocks) ---
     #[test]
-    fn test_utf8_spill_safety() {
+    fn test_string_spill_trigger_on_multibyte_char() {
         // Emojis are 4 bytes each.
         // Capacity 6: Can hold 1 emoji (4 bytes) + 2 bytes.
         // Cannot hold 2 emojis (8 bytes).
@@ -764,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn test_utf8_str_boundary_spill() {
+    fn test_string_spill_trigger_on_multibyte_str() {
         // Test `push_str` splitting logic (though we copy fully)
         let mut s: SmallString<5> = SmallString::new();
         s.push_str("hi");
@@ -779,7 +870,7 @@ mod tests {
 
     // --- 6. Formatting Macro (fmt::Write) ---
     #[test]
-    fn test_fmt_write() {
+    fn test_string_traits_fmt_write() {
         let mut s: SmallString<16> = SmallString::new();
 
         // Should fit on stack
@@ -796,7 +887,7 @@ mod tests {
 
     // --- 7. Large Allocation Strategy ---
     #[test]
-    fn test_large_growth_strategy() {
+    fn test_string_spill_trigger_on_large_growth() {
         let mut s: SmallString<4> = SmallString::new();
         s.push_str("12");
 
@@ -812,7 +903,7 @@ mod tests {
 
     // --- 8. Zero Capacity Edge Case ---
     #[test]
-    fn test_zero_capacity() {
+    fn test_string_any_storage_zero_capacity() {
         // A SmallString that holds nothing on the stack
         let mut s: SmallString<0> = SmallString::new();
 
@@ -825,7 +916,7 @@ mod tests {
 
     // --- 9. Clear & Reuse ---
     #[test]
-    fn test_clear_reuse() {
+    fn test_string_any_storage_clear_reuse() {
         let mut s: SmallString<4> = SmallString::new();
 
         // Stack -> Clear -> Stack
@@ -851,7 +942,7 @@ mod tests {
 
     // --- 10. Deref Methods ---
     #[test]
-    fn test_deref_methods() {
+    fn test_string_traits_deref_methods() {
         let s: SmallString<10> = SmallString::from("hello");
 
         // These methods come from standard `str`, working via Deref
@@ -862,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clone_on_stack() {
+    fn test_string_traits_clone_on_stack() {
         // N=16. "Hello" (5 bytes) fits on stack.
         let mut original: SmallString<16> = SmallString::new();
         original.push_str("Hello");
@@ -884,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clone_on_heap() {
+    fn test_string_traits_clone_on_heap() {
         // N=4. "Hello" (5 bytes) forces a spill to Heap.
         let mut original: SmallString<4> = SmallString::new();
         original.push_str("Hello");
@@ -914,7 +1005,7 @@ mod tests {
 
     // --- 1. Equality & Ordering Tests ---
     #[test]
-    fn test_equality() {
+    fn test_string_traits_equality() {
         // Stack vs Stack
         let s1: SmallString<16> = SmallString::from("hello");
         let s2: SmallString<16> = SmallString::from("hello");
@@ -939,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering() {
+    fn test_string_traits_ordering() {
         let apple: SmallString<16> = SmallString::from("Apple");
         let banana: SmallString<16> = SmallString::from("Banana");
 
@@ -956,7 +1047,7 @@ mod tests {
 
     // --- 2. Hashing Tests ---
     #[test]
-    fn test_hashing() {
+    fn test_string_traits_hashing() {
         let s_stack: SmallString<16> = SmallString::from("testing");
         let s_heap: SmallString<2> = SmallString::from("testing"); // Spills
         let s_std: String = String::from("testing");
@@ -983,7 +1074,7 @@ mod tests {
 
     // --- 3. Borrow & AsRef Tests ---
     #[test]
-    fn test_borrow_and_as_ref() {
+    fn test_string_traits_borrow_as_ref() {
         let s: SmallString<16> = SmallString::from("hello");
 
         // Function expecting &str
@@ -998,7 +1089,7 @@ mod tests {
 
     // --- 4. Iterator Tests (FromIterator / Extend) ---
     #[test]
-    fn test_from_iterator() {
+    fn test_string_traits_from_iterator() {
         // Collect chars -> Stack
         let chars = vec!['a', 'b', 'c'];
         let s_stack: SmallString<16> = chars.into_iter().collect();
@@ -1018,7 +1109,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extend() {
+    fn test_string_traits_extend() {
         let mut s: SmallString<4> = SmallString::new();
 
         // Extend a little (Stack)
@@ -1034,7 +1125,7 @@ mod tests {
 
     // --- 5. Manipulation Tests (Pop / Truncate) ---
     #[test]
-    fn test_pop() {
+    fn test_string_any_storage_pop() {
         // Stack Pop
         let mut s: SmallString<16> = SmallString::from("abc");
         assert_eq!(s.pop(), Some('c'));
@@ -1053,7 +1144,7 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate() {
+    fn test_string_any_storage_truncate_v2() {
         // Stack Truncate
         let mut s: SmallString<16> = SmallString::from("Hello World");
         s.truncate(5);
@@ -1073,7 +1164,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_truncate_mid_char_panic() {
+    fn test_string_any_storage_truncate_panic() {
         let mut s: SmallString<16> = SmallString::from("🦀"); // 4 bytes
         // Truncating inside a multibyte char panics in std, should panic here too
         s.truncate(2);
@@ -1081,7 +1172,7 @@ mod tests {
 
     // --- 6. Reserve (Spill Control) ---
     #[test]
-    fn test_reserve() {
+    fn test_string_any_storage_reserve() {
         // Case 1: Reserve fits in Stack
         let mut s: SmallString<16> = SmallString::new();
         s.push_str("Hi");
@@ -1107,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn test_into_string() {
+    fn test_string_any_storage_into_string() {
         // Stack -> String
         let s_stack: SmallString<16> = SmallString::from("stack");
         let std_str = s_stack.into_string();
@@ -1122,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_utf8() {
+    fn test_string_any_storage_from_utf8() {
         let bytes = vec![104, 101, 108, 108, 111]; // "hello"
 
         // Fits on Stack
@@ -1141,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn test_retain() {
+    fn test_string_any_storage_retain() {
         // Stack Retain
         let mut s: SmallString<16> = SmallString::from("AbCdEf");
         s.retain(|c| c.is_lowercase());
@@ -1156,9 +1247,87 @@ mod tests {
     }
 
     #[test]
-    fn test_into_bytes() {
+    fn test_string_any_storage_into_bytes() {
         let s: SmallString<16> = SmallString::from("ABC");
         let bytes = s.into_bytes();
         assert_eq!(bytes, vec![65, 66, 67]);
+    }
+
+    #[test]
+    fn test_string_any_storage_from_utf8_lossy() {
+        let bytes = b"hello \xF0\x90\x80world"; // Invalid UTF-8
+        let s: SmallString<16> = SmallString::from_utf8_lossy(bytes);
+        assert!(s.contains("hello "));
+        assert!(s.contains("world"));
+        assert!(s.is_on_stack());
+
+        let huge_invalid = b"a".repeat(100);
+        let s2: SmallString<16> = SmallString::from_utf8_lossy(&huge_invalid);
+        assert!(!s2.is_on_stack());
+    }
+
+    #[test]
+    fn test_string_any_storage_as_bytes_mut() {
+        let mut s: SmallString<16> = SmallString::from("abc");
+        unsafe {
+            let bytes = s.as_bytes_mut();
+            bytes[0] = b'z';
+        }
+        assert_eq!(s, "zbc");
+    }
+
+    #[test]
+    fn test_string_traits_debug_display() {
+        let h: SmallString<2> = SmallString::from("a");
+        let debug = format!("{:?}", h);
+        assert_eq!(debug, "\"a\"");
+        let display = format!("{}", h);
+        assert_eq!(display, "a");
+    }
+
+    #[test]
+    fn test_string_any_storage_truncate() {
+        // truncate stack
+        let mut s: SmallString<16> = SmallString::from("hello");
+        s.truncate(2);
+        assert_eq!(s, "he");
+
+        // truncate heap
+        let mut h: SmallString<2> = SmallString::from("abc");
+        h.truncate(1);
+        assert_eq!(h, "a");
+    }
+
+    #[test]
+    fn test_string_any_storage_deref_mut() {
+        let mut s_mut = SmallString::<16>::from("abc");
+        s_mut.as_mut_str().make_ascii_uppercase();
+        assert_eq!(s_mut, "ABC");
+
+        let mut h: SmallString<1> = SmallString::from_str("abc");
+        h.as_mut_str().make_ascii_uppercase();
+        assert_eq!(h, "ABC");
+    }
+
+    #[test]
+    fn test_string_any_storage_partial_eq_variants() {
+        let h: SmallString<1> = SmallString::from_str("abc");
+        assert!(h == "abc");
+        let s_ref = "abc";
+        assert!(h == s_ref);
+    }
+
+    #[test]
+    fn test_string_any_storage_extend_char() {
+        let mut h: SmallString<1> = SmallString::from_str("abc");
+        h.extend(['!', '?'].iter().cloned());
+        assert_eq!(h, "abc!?");
+    }
+
+    #[test]
+    fn test_string_any_storage_from_utf8_long() {
+        let long_bytes = b"a".repeat(100);
+        let s_long = SmallString::<16>::from_utf8(long_bytes).unwrap();
+        assert!(!s_long.is_on_stack());
     }
 }

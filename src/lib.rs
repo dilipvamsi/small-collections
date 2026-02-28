@@ -1,100 +1,138 @@
+#![doc = include_str!("../README.md")]
 //! # Small Collections
 //!
-//! High-performance collection types that live on the stack for small sizes and automatically
-//! spill to the heap when they grow larger.
+//! A collection of data structures optimized for small-buffer scenarios.
 //!
-//! This crate provides `SmallMap`, `SmallSet`, and `SmallString`. These are drop-in replacements
-//! for `HashMap`, `HashSet`, and `String` optimized for cases where collections often remain small.
+//! ## Overview
+//! This crate provides a variety of collections that are designed to reside on the stack
+//! up to a specific capacity `N`. If the collection exceeds this capacity, it automatically
+//! "spills" its contents to a corresponding heap-allocated collection from the standard library
+//! or specialized crates (like `hashbrown` or `bitvec`).
+//!
+//! This approach balances the performance benefits of zero-allocation stack storage for small workloads
+//! with the flexibility of heap storage for larger or unpredictable workloads.
 //!
 //! ## Key Features
+//! - **Zero-Allocation Initial State:** All collections start on the stack.
+//! - **Automatic Spill:** Seamless transition to heap storage when needed.
+//! - **Efficient Spills:** Items are moved (bitwise copy/ownership transfer), never cloned during a spill.
+//! - **Safety:** Extensively verified with Miri to ensure zero memory leaks and no Undefined Behavior (UB).
 //!
-//! * **Stack Optimization:** Items are stored inline on the stack (no heap allocation) until the capacity `N` is exceeded.
-//! * **Zero-Cost Spill:** When `N` is exceeded, items are moved to the heap without cloning (for maps) or with minimal overhead.
-//! * **Performance:** Uses `FnvHasher` internally for extremely fast hashing on small keys.
-//! * **Compile-Time Safety:** Enforces strict size limits (max 16KB) during the build process to prevent accidental stack overflows.
-//! * **Interoperability:** `SmallSet` implements the `AnySet` trait, allowing efficient operations against standard `HashSet` and `BTreeSet`.
+//! ## Documentation Examples
 //!
-//! ## Capacity Constraints (`N`)
-//!
-//! The capacity generic constant `N` (stack size) determines when the collection spills to the heap.
-//!
-//! * **For `SmallMap` and `SmallSet`:**
-//!     * `N` must be a **power of two** (e.g., 2, 4, 8, 16, 32...).
-//!     * `N` must be **greater than 1**.
-//!     * *Constraint source:* Underlying `heapless::IndexMap`.
-//!
-//! * **For `SmallString`:**
-//!     * `N` can be any non-zero size (e.g., 20, 80, 128).
-//!     * Power-of-two is recommended for alignment but not enforced.
-//!
-//! ## Examples
-//!
-//! ### SmallMap
-//!
+//! ### SmallVec
 //! ```rust
-//! use small_collections::SmallMap;
-//!
-//! // Capacity 4. Lives on stack.
-//! let mut map: SmallMap<String, i32, 4> = SmallMap::new();
-//!
-//! map.insert("A".to_string(), 10);
-//! map.insert("B".to_string(), 20);
-//!
-//! assert!(map.is_on_stack());
-//! assert_eq!(map.get("A"), Some(&10));
-//!
-//! // Insert 5th item -> Spills to Heap automatically
-//! map.insert("C".to_string(), 30);
-//! map.insert("D".to_string(), 40);
-//! map.insert("E".to_string(), 50);
-//!
-//! assert!(!map.is_on_stack());
+//! use small_collections::SmallVec;
+//! let mut v: SmallVec<i32, 4> = SmallVec::new();
+//! v.push(1);
+//! v.push(2);
+//! assert!(v.is_on_stack());
 //! ```
 //!
-//! ### SmallSet
-//!
+//! ### SmallDeque
 //! ```rust
-//! use small_collections::SmallSet;
-//!
-//! let mut set: SmallSet<i32, 2> = SmallSet::new();
-//!
-//! set.insert(1);
-//! set.insert(2);
-//! assert!(set.is_on_stack());
-//!
-//! // Spills on 3rd item
-//! set.insert(3);
-//! assert!(!set.is_on_stack());
+//! use small_collections::SmallDeque;
+//! let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+//! d.push_back(1);
+//! d.push_front(2);
+//! assert_eq!(d.pop_back(), Some(1));
 //! ```
 //!
 //! ### SmallString
-//!
 //! ```rust
 //! use small_collections::SmallString;
-//!
-//! // Capacity 16 bytes. Fits "Hello World" (11 bytes).
 //! let mut s: SmallString<16> = SmallString::new();
-//!
 //! s.push_str("Hello");
-//! s.push_str(" World");
-//!
 //! assert!(s.is_on_stack());
-//! assert_eq!(s.as_str(), "Hello World");
-//!
-//! // Append more text to trigger a spill
-//! s.push_str(" - This part pushes it over the limit!");
-//!
-//! assert!(!s.is_on_stack());
 //! ```
+//!
+//! ### SmallMap & SmallSet
+//! ```rust
+//! use small_collections::{SmallMap, SmallSet};
+//! let mut map: SmallMap<&str, i32, 4> = SmallMap::new();
+//! map.insert("key", 10);
+//!
+//! let mut set: SmallSet<i32, 4> = SmallSet::new();
+//! set.insert(1);
+//! ```
+//!
+//! ### SmallBTreeMap & SmallBTreeSet
+//! ```rust
+//! use small_collections::{SmallBTreeMap, SmallBTreeSet};
+//! let mut bmap: SmallBTreeMap<i32, i32, 4> = SmallBTreeMap::new();
+//! bmap.insert(1, 10);
+//!
+//! let mut bset: SmallBTreeSet<i32, 4> = SmallBTreeSet::new();
+//! bset.insert(1);
+//! ```
+//!
+//! ### SmallOrderedMap & SmallOrderedSet
+//! ```rust
+//! use small_collections::{SmallOrderedMap, SmallOrderedSet};
+//! let mut omap: SmallOrderedMap<i32, i32, 4> = SmallOrderedMap::new();
+//! omap.insert(1, 10);
+//!
+//! let mut oset: SmallOrderedSet<i32, 4> = SmallOrderedSet::new();
+//! oset.insert(1);
+//! ```
+//!
+//! ### SmallBinaryHeap
+//! ```rust
+//! use small_collections::SmallBinaryHeap;
+//! let mut heap: SmallBinaryHeap<i32, 4> = SmallBinaryHeap::new();
+//! heap.push(10);
+//! heap.push(20);
+//! assert_eq!(heap.pop(), Some(20));
+//! ```
+//!
+//! ### SmallLruCache
+//! ```rust
+//! use small_collections::SmallLruCache;
+//! use std::num::NonZeroUsize;
+//! let mut cache: SmallLruCache<i32, i32, 4> = SmallLruCache::new(NonZeroUsize::new(2).unwrap());
+//! cache.put(1, 10);
+//! ```
+//!
+//! ### SmallBitVec
+//! ```rust
+//! use small_collections::SmallBitVec;
+//! let mut bv: SmallBitVec<64> = SmallBitVec::new();
+//! bv.push(true);
+//! assert!(bv.get(0).unwrap());
+//! ```
+//!
+//! ## Capacity Constraints
+//! Many collections using the `heapless` backend require `N` to be a power of two and greater than 1.
+//! These constraints are enforced at compile time.
 
 // --- Module Declarations ---
 
+pub mod bitvec;
+pub mod btree_map;
+pub mod btree_set;
+pub mod deque;
+pub mod heap;
+pub mod heapless_bitvec;
+pub mod lru_cache;
 pub mod map;
+pub mod ordered_map;
+pub mod ordered_set;
 pub mod set;
 pub mod string;
+pub mod vec;
 
 // --- Re-exports ---
 
-pub use map::SmallMap;
+pub use bitvec::{AnyBitVec, SmallBitVec};
+pub use btree_map::{AnyBTreeMap, SmallBTreeMap};
+pub use btree_set::SmallBTreeSet;
+pub use deque::{AnyDeque, SmallDeque};
+pub use heap::{AnyHeap, SmallBinaryHeap};
+pub use heapless_bitvec::HeaplessBitVec;
+pub use lru_cache::{AnyLruCache, SmallLruCache};
+pub use map::{AnyMap, SmallMap};
+pub use ordered_map::SmallOrderedMap;
+pub use ordered_set::SmallOrderedSet;
 pub use set::{AnySet, SmallSet};
-pub use string::SmallString;
+pub use string::{AnyString, SmallString};
+pub use vec::{AnyVec, SmallVec};

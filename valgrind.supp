@@ -1,0 +1,18 @@
+{
+   std_thread_init_leak
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   ...
+   fun:_ZN*3std6thread6thread6Thread3new*
+   ...
+}
+{
+   std_thread_init_leak_mpmc
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   ...
+   fun:*std*sync*mpmc*context*Context*new*
+   ...
+}
