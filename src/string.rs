@@ -9,7 +9,7 @@
 //! [`AnyString`] provides an object-safe trait over both backends.
 
 use core::mem::ManuallyDrop;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, BorrowMut};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -510,6 +510,12 @@ impl<const N: usize> Borrow<str> for SmallString<N> {
     }
 }
 
+impl<const N: usize> BorrowMut<str> for SmallString<N> {
+    fn borrow_mut(&mut self) -> &mut str {
+        self.as_mut_str()
+    }
+}
+
 impl<const N: usize> AsRef<str> for SmallString<N> {
     fn as_ref(&self) -> &str {
         self.as_str()
@@ -787,7 +793,21 @@ mod tests {
     use std::fmt::Write; // Required for write! macro tests
     use std::hash::{Hash, Hasher};
 
-    // --- 1. Basic Stack Operations ---
+    #[test]
+    fn test_string_traits_borrow() {
+        use std::borrow::{Borrow, BorrowMut};
+        let mut s: SmallString<16> = SmallString::from("abc");
+
+        // Test Borrow<str>
+        let b: &str = s.borrow();
+        assert_eq!(b, "abc");
+
+        // Test BorrowMut<str>
+        let b_mut: &mut str = s.borrow_mut();
+        b_mut.make_ascii_uppercase();
+        assert_eq!(s.as_str(), "ABC");
+    }
+
     #[test]
     fn test_string_stack_ops_basic() {
         let mut s: SmallString<16> = SmallString::new();

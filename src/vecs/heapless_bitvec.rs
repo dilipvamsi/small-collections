@@ -4,9 +4,11 @@
 //! Capacity is measured in **bytes** (`N`); total bit capacity is `N * 8`.
 //! Uses `bitvec`'s `BitOrder` generic to control the bit-within-byte ordering.
 
-use bitvec::prelude::{BitOrder, Lsb0};
+use bitvec::prelude::{BitOrder, BitSlice, Lsb0};
 use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
 use heapless::Vec as HVec;
+use std::borrow::{Borrow, BorrowMut};
 
 use crate::AnyBitVec;
 
@@ -147,6 +149,44 @@ impl<const N: usize, O: BitOrder> HeaplessBitVec<N, O> {
     pub fn as_raw_slice(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// Returns a `BitSlice` view of the bits.
+    pub fn as_bitslice(&self) -> &BitSlice<u8, O> {
+        let slice = BitSlice::<u8, O>::from_slice(self.bytes.as_slice());
+        &slice[..self.bit_len]
+    }
+
+    /// Returns a mutable `BitSlice` view of the bits.
+    pub fn as_bitslice_mut(&mut self) -> &mut BitSlice<u8, O> {
+        let slice = BitSlice::<u8, O>::from_slice_mut(self.bytes.as_mut_slice());
+        &mut slice[..self.bit_len]
+    }
+}
+
+impl<const N: usize, O: BitOrder> Deref for HeaplessBitVec<N, O> {
+    type Target = BitSlice<u8, O>;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_bitslice()
+    }
+}
+
+impl<const N: usize, O: BitOrder> DerefMut for HeaplessBitVec<N, O> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_bitslice_mut()
+    }
+}
+
+impl<const N: usize, O: BitOrder> Borrow<BitSlice<u8, O>> for HeaplessBitVec<N, O> {
+    fn borrow(&self) -> &BitSlice<u8, O> {
+        self.as_bitslice()
+    }
+}
+
+impl<const N: usize, O: BitOrder> BorrowMut<BitSlice<u8, O>> for HeaplessBitVec<N, O> {
+    fn borrow_mut(&mut self) -> &mut BitSlice<u8, O> {
+        self.as_bitslice_mut()
+    }
 }
 
 impl<const N: usize, O: BitOrder> Default for HeaplessBitVec<N, O> {
@@ -169,6 +209,24 @@ impl<const N: usize, O: BitOrder> AnyBitVec for HeaplessBitVec<N, O> {
 mod tests {
     use super::*;
     use bitvec::prelude::{Lsb0, Msb0};
+
+    #[test]
+    fn test_heapless_bitvec_traits_bitslice() {
+        use std::borrow::BorrowMut;
+        let mut bv: HeaplessBitVec<1, Lsb0> = HeaplessBitVec::new();
+        bv.push(true).unwrap();
+        bv.push(false).unwrap();
+
+        // Deref to BitSlice
+        let slice: &bitvec::slice::BitSlice<u8, Lsb0> = &bv;
+        assert_eq!(slice.len(), 2);
+        assert_eq!(slice[0], true);
+
+        // BorrowMut
+        let slice_mut: &mut bitvec::slice::BitSlice<u8, Lsb0> = bv.borrow_mut();
+        slice_mut.set(1, true);
+        assert_eq!(bv.get(1), Some(true));
+    }
 
     #[test]
     fn test_heapless_bitvec_stack_ops_lsb0() {

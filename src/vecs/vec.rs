@@ -639,6 +639,18 @@ impl<T, const N: usize> AsRef<[T]> for SmallVec<T, N> {
     }
 }
 
+impl<T, const N: usize> std::borrow::Borrow<[T]> for SmallVec<T, N> {
+    fn borrow(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T, const N: usize> std::borrow::BorrowMut<[T]> for SmallVec<T, N> {
+    fn borrow_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
+    }
+}
+
 impl<T, const N: usize> AsMut<[T]> for SmallVec<T, N> {
     fn as_mut(&mut self) -> &mut [T] {
         self.as_mut_slice()
@@ -737,6 +749,21 @@ impl<T, const N: usize> SmallVec<T, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vec_traits_borrow() {
+        use std::borrow::{Borrow, BorrowMut};
+        let mut v: SmallVec<i32, 4> = SmallVec::from_iter([1, 2, 3]);
+
+        // Test Borrow<[i32]>
+        let b: &[i32] = v.borrow();
+        assert_eq!(b, &[1, 2, 3]);
+
+        // Test BorrowMut<[i32]>
+        let b_mut: &mut [i32] = v.borrow_mut();
+        b_mut[0] = 10;
+        assert_eq!(v.as_slice(), &[10, 2, 3]);
+    }
 
     #[test]
     fn test_vec_stack_push_pop_basic() {

@@ -6,9 +6,11 @@
 //! inspection trait implemented by both.
 
 use crate::HeaplessBitVec;
-use bitvec::prelude::{BitOrder, BitVec, Lsb0};
+use bitvec::prelude::{BitOrder, BitSlice, BitVec, Lsb0};
 use core::mem::ManuallyDrop;
+use core::ops::{Deref, DerefMut};
 use core::ptr;
+use std::borrow::{Borrow, BorrowMut};
 
 /// A trait for uniform inspection of bit vectors.
 pub trait AnyBitVec {
@@ -158,6 +160,28 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    /// Returns a `BitSlice` view of the bits.
+    pub fn as_bitslice(&self) -> &BitSlice<u8, O> {
+        unsafe {
+            if self.on_stack {
+                self.data.stack.as_bitslice()
+            } else {
+                self.data.heap.as_bitslice()
+            }
+        }
+    }
+
+    /// Returns a mutable `BitSlice` view of the bits.
+    pub fn as_bitslice_mut(&mut self) -> &mut BitSlice<u8, O> {
+        unsafe {
+            if self.on_stack {
+                (*self.data.stack).as_bitslice_mut()
+            } else {
+                (*self.data.heap).as_mut_bitslice()
+            }
+        }
+    }
+
     /// The Critical Spill Function
     /// Moves data from HeaplessBitVec -> bitvec::BitVec
     #[inline(never)]
@@ -180,6 +204,32 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
             ptr::write(&mut self.data.heap, ManuallyDrop::new(heap_vec));
             self.on_stack = false;
         }
+    }
+}
+
+impl<const N: usize, O: BitOrder> Deref for SmallBitVec<N, O> {
+    type Target = BitSlice<u8, O>;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_bitslice()
+    }
+}
+
+impl<const N: usize, O: BitOrder> DerefMut for SmallBitVec<N, O> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_bitslice_mut()
+    }
+}
+
+impl<const N: usize, O: BitOrder> Borrow<BitSlice<u8, O>> for SmallBitVec<N, O> {
+    fn borrow(&self) -> &BitSlice<u8, O> {
+        self.as_bitslice()
+    }
+}
+
+impl<const N: usize, O: BitOrder> BorrowMut<BitSlice<u8, O>> for SmallBitVec<N, O> {
+    fn borrow_mut(&mut self) -> &mut BitSlice<u8, O> {
+        self.as_bitslice_mut()
     }
 }
 
@@ -256,6 +306,32 @@ impl<const N: usize, O: BitOrder> Default for SmallBitVec<N, O> {
 mod tests {
     use super::*;
     use bitvec::prelude::{Lsb0, Msb0};
+
+    #[test]
+    fn test_bitvec_traits_bitslice() {
+        use std::borrow::BorrowMut;
+        let mut sbv: SmallBitVec<1, Lsb0> = SmallBitVec::new();
+        sbv.push(true);
+        sbv.push(false);
+
+        // Deref to BitSlice
+        let slice: &bitvec::slice::BitSlice<u8, Lsb0> = &sbv;
+        assert_eq!(slice.len(), 2);
+
+        // BorrowMut
+        let slice_mut: &mut bitvec::slice::BitSlice<u8, Lsb0> = sbv.borrow_mut();
+        slice_mut.set(1, true);
+        assert_eq!(sbv.get(1), Some(true));
+
+        // Spill and test again
+        for _ in 0..10 {
+            sbv.push(true);
+        }
+        assert!(!sbv.is_on_stack());
+
+        let slice_heap: &bitvec::slice::BitSlice<u8, Lsb0> = &sbv;
+        assert_eq!(slice_heap.len(), 12);
+    }
 
     #[test]
     fn test_bitvec_spill_trigger_lsb0() {
