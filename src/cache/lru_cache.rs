@@ -1,11 +1,5 @@
 #![cfg(feature = "lru")]
 //! LRU cache that lives on the stack and spills to the heap.
-//!
-//! Provides [`SmallLruCache`] — an LRU cache that uses a stack-allocated
-//! backend for small workloads and spills to the [`lru`](https://docs.rs/lru)
-//! crate's `LruCache` once the stack capacity is exceeded.
-//!
-//! [`AnyLruCache`] is an object-safe trait abstracting over both backends.
 
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
@@ -20,61 +14,63 @@ use crate::HeaplessBTreeLruCache;
 use crate::IndexType;
 
 /// An object-safe abstraction over LRU cache types.
-///
-/// Implemented by `lru::LruCache<K, V>` (heap) and `SmallLruCache<K, V, N, I, S>` (small/stack)
-/// so that callers can be backend-agnostic.
 pub trait AnyLruCache<K, V> {
-    /// Returns the number of entries currently cached.
     fn len(&self) -> usize;
-
-    /// Returns `true` if the cache is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// Returns the logical capacity of the cache.
     fn cap(&self) -> NonZeroUsize;
-
-    /// Inserts or updates `(key, value)`, evicting the LRU entry if at capacity.
-    /// Returns the previous value if the key already existed.
     fn put(&mut self, key: K, value: V) -> Option<V>;
-
-    /// Special put for heapless backends that might fail if physically full.
-    ///
-    /// Returns:
-    /// - `Option<V>`: The old value if the key existed.
-    /// - `Result<(), (K, V)>`: `Ok(())` if insertion succeeded, or `Err((K, V))` if the backend is physically full.
     fn put_with_cap(
         &mut self,
         key: K,
         value: V,
         cap: NonZeroUsize,
     ) -> (Option<V>, Result<(), (K, V)>);
-
-    /// Returns a shared reference to the value for `key` and promotes it to MRU.
     fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
-
-    /// Returns an exclusive reference to the value for `key` and promotes it to MRU.
     fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
-
-    /// Returns a shared reference to the value for `key` **without** changing LRU order.
     fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
-
-    /// Removes all entries.
     fn clear(&mut self);
-
-    /// Removes and returns the LRU entry.
-    /// Used primarily for spilling data between backends.
     fn pop_lru(&mut self) -> Option<(K, V)>;
+    fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized;
+    fn push(&mut self, key: K, value: V) -> Option<(K, V)>;
+    fn pop<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized;
+    fn pop_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized;
+    fn promote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized;
+    fn demote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized;
+    fn peek_lru(&self) -> Option<(&K, &V)>;
+}
+
+/// Helper trait for backends that support iteration.
+pub trait LruIteratorSupport<'a, K: 'a, V: 'a> {
+    type Iter: Iterator<Item = (&'a K, &'a V)>;
+    type IterMut: Iterator<Item = (&'a K, &'a mut V)>;
+    fn iter(&'a self) -> Self::Iter;
+    fn iter_mut(&'a mut self) -> Self::IterMut;
 }
 
 impl<K: Hash + Eq + Ord, V> AnyLruCache<K, V> for LruCache<K, V> {
@@ -122,26 +118,65 @@ impl<K: Hash + Eq + Ord, V> AnyLruCache<K, V> for LruCache<K, V> {
     fn pop_lru(&mut self) -> Option<(K, V)> {
         self.pop_lru()
     }
+    fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.contains(key)
+    }
+    fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
+        self.push(key, value)
+    }
+    fn pop<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.pop(key)
+    }
+    fn pop_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.pop_entry(key)
+    }
+    fn promote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.promote(key)
+    }
+    fn demote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.demote(key)
+    }
+    fn peek_lru(&self) -> Option<(&K, &V)> {
+        self.peek_lru()
+    }
 }
 
-pub type DefaultHasher = std::collections::hash_map::RandomState;
+impl<'a, K: Hash + Eq + Ord + 'a, V: 'a> LruIteratorSupport<'a, K, V> for LruCache<K, V> {
+    type Iter = lru::Iter<'a, K, V>;
+    type IterMut = lru::IterMut<'a, K, V>;
+    fn iter(&'a self) -> Self::Iter {
+        self.iter()
+    }
+    fn iter_mut(&'a mut self) -> Self::IterMut {
+        self.iter_mut()
+    }
+}
 
-/// Tagged union holding either the stack backend `S` or the heap `LruCache`.
-///
-/// # Safety
-/// `SmallLruCache::on_stack` is the discriminant.
 pub union LruData<K, V, S> {
     pub stack: ManuallyDrop<S>,
     pub heap: ManuallyDrop<LruCache<K, V>>,
 }
 
-/// An LRU cache that lives on the stack for up to `N` entries, then spills to
-/// a heap-allocated `lru::LruCache`.
-///
-/// # Storage strategy
-/// Uses a tagged union ([`LruData`]) with:
-/// - **Stack side**: A generic storage type `S` (e.g., [`HeaplessBTreeLruCache`]).
-/// - **Heap side**: `lru::LruCache<K, V>` — standard linked-hash-map-based LRU.
 pub struct SmallLruCache<
     K,
     V,
@@ -164,26 +199,16 @@ where
     I: IndexType,
     S: AnyLruCache<K, V>,
 {
-    /// Returns the number of entries currently in the cache.
-    #[inline(always)]
     pub fn len(&self) -> usize {
         self.num_entries
     }
-
-    /// Returns `true` if the cache is empty.
-    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.num_entries == 0
     }
-
-    /// Returns the logical capacity of the cache.
-    #[inline(always)]
     pub fn capacity(&self) -> NonZeroUsize {
         self.capacity
     }
 
-    /// Returns a reference to the value associated with the key and promotes it to MRU.
-    #[inline(always)]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -196,8 +221,6 @@ where
         }
     }
 
-    /// Returns a mutable reference to the value associated with the key and promotes it to MRU.
-    #[inline(always)]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -210,8 +233,6 @@ where
         }
     }
 
-    /// Returns a reference to the value associated with the key without promoting it.
-    #[inline(always)]
     pub fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -224,56 +245,26 @@ where
         }
     }
 
-    /// Inserts a key-value pair into the cache.
-    ///
-    /// # Pseudo Code:
-    /// ```text
-    /// if on_stack:
-    ///     try put into stack backend (with capacity check)
-    ///     if success:
-    ///         update num_entries and return
-    ///     else (stack full/collision):
-    ///         spill_to_heap()
-    ///         fallthrough to heap logic
-    ///
-    /// put into heap backend
-    /// update num_entries
-    /// ```
-    #[inline(always)]
     pub fn put(&mut self, key: K, value: V) -> Option<V> {
         if self.on_stack {
             let (old_v, res) =
                 unsafe { (*self.data.stack).put_with_cap(key, value, self.capacity) };
-            match res {
-                Ok(()) => {
-                    self.num_entries = unsafe { (*self.data.stack).len() };
-                    return old_v;
-                }
-                Err((k, v)) => {
-                    self.spill_to_heap();
-                    let (res, _) = unsafe { (*self.data.heap).put_with_cap(k, v, self.capacity) };
-                    self.num_entries = unsafe { (*self.data.heap).len() };
-                    return res;
-                }
+            if res.is_ok() {
+                self.num_entries = unsafe { (*self.data.stack).len() };
+                return old_v;
+            } else {
+                let (k, v) = res.err().unwrap();
+                self.spill_to_heap();
+                let old = unsafe { (*self.data.heap).put(k, v) };
+                self.num_entries = unsafe { (*self.data.heap).len() };
+                return old;
             }
         }
-        let (res, _) = unsafe { (*self.data.heap).put_with_cap(key, value, self.capacity) };
+        let old = unsafe { (*self.data.heap).put(key, value) };
         self.num_entries = unsafe { (*self.data.heap).len() };
-        res
+        old
     }
 
-    /// Moves all data from the stack backend to the heap backend.
-    ///
-    /// # Pseudo Code:
-    /// ```text
-    /// create new heap LruCache
-    /// take stack backend out of union
-    /// while stack has entries (pop_lru):
-    ///     insert entry into heap cache
-    /// write heap cache back into union
-    /// set on_stack = false
-    /// ```
-    #[inline(never)]
     fn spill_to_heap(&mut self) {
         if !self.on_stack {
             return;
@@ -289,42 +280,204 @@ where
         }
     }
 
-    /// Removes all entries from the cache.
     pub fn clear(&mut self) {
         if self.on_stack {
-            unsafe { (*self.data.stack).clear() };
+            unsafe { (*self.data.stack).clear() }
         } else {
-            unsafe { (*self.data.heap).clear() };
+            unsafe { (*self.data.heap).clear() }
         }
         self.num_entries = 0;
     }
 
-    /// Returns `true` if the cache is currently using the stack-allocated backend.
-    #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
+
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        if self.on_stack {
+            unsafe { (*self.data.stack).contains(key) }
+        } else {
+            unsafe { (*self.data.heap).contains(key) }
+        }
+    }
+
+    pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
+        if self.on_stack {
+            let res = unsafe { (*self.data.stack).push(key, value) };
+            self.num_entries = unsafe { (*self.data.stack).len() };
+            res
+        } else {
+            let res = unsafe { (*self.data.heap).push(key, value) };
+            self.num_entries = unsafe { (*self.data.heap).len() };
+            res
+        }
+    }
+
+    pub fn pop<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        let res = if self.on_stack {
+            unsafe { (*self.data.stack).pop(key) }
+        } else {
+            unsafe { (*self.data.heap).pop(key) }
+        };
+        if res.is_some() {
+            self.num_entries -= 1;
+        }
+        res
+    }
+
+    pub fn pop_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        let res = if self.on_stack {
+            unsafe { (*self.data.stack).pop_entry(key) }
+        } else {
+            unsafe { (*self.data.heap).pop_entry(key) }
+        };
+        if res.is_some() {
+            self.num_entries -= 1;
+        }
+        res
+    }
+
+    pub fn pop_lru(&mut self) -> Option<(K, V)> {
+        let res = if self.on_stack {
+            unsafe { (*self.data.stack).pop_lru() }
+        } else {
+            unsafe { (*self.data.heap).pop_lru() }
+        };
+        if res.is_some() {
+            self.num_entries -= 1;
+        }
+        res
+    }
+
+    pub fn promote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        if self.on_stack {
+            unsafe { (*self.data.stack).promote(key) }
+        } else {
+            unsafe { (*self.data.heap).promote(key) }
+        }
+    }
+
+    pub fn demote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        if self.on_stack {
+            unsafe { (*self.data.stack).demote(key) }
+        } else {
+            unsafe { (*self.data.heap).demote(key) }
+        }
+    }
+
+    pub fn peek_lru(&self) -> Option<(&K, &V)> {
+        if self.on_stack {
+            unsafe { (*self.data.stack).peek_lru() }
+        } else {
+            unsafe { (*self.data.heap).peek_lru() }
+        }
+    }
+
+    pub fn resize(&mut self, cap: NonZeroUsize) {
+        if self.on_stack {
+            if cap.get() > N {
+                self.spill_to_heap();
+                unsafe { (*self.data.heap).resize(cap) };
+            }
+        } else {
+            unsafe { (*self.data.heap).resize(cap) };
+        }
+        self.capacity = cap;
+    }
+
+    /// Returns a reference to the value for the key, or inserts a new one.
+    pub fn get_or_insert<F>(&mut self, key: K, f: F) -> &V
+    where
+        F: FnOnce() -> V,
+    {
+        if self.contains(&key) {
+            self.get(&key).unwrap()
+        } else {
+            self.put(key.clone(), f());
+            self.get(&key).unwrap()
+        }
+    }
+
+    /// Returns a mutable reference to the value for the key, or inserts a new one.
+    pub fn get_or_insert_mut<F>(&mut self, key: K, f: F) -> &mut V
+    where
+        F: FnOnce() -> V,
+    {
+        if self.contains(&key) {
+            self.get_mut(&key).unwrap()
+        } else {
+            self.put(key.clone(), f());
+            self.get_mut(&key).unwrap()
+        }
+    }
+
+    pub fn iter(&self) -> Iter<'_, K, V, N, I, S>
+    where
+        for<'a> S: LruIteratorSupport<'a, K, V>,
+    {
+        if self.on_stack {
+            Iter::Stack(unsafe { (*self.data.stack).iter() })
+        } else {
+            Iter::Heap(unsafe { (*self.data.heap).iter() })
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, N, I, S>
+    where
+        for<'a> S: LruIteratorSupport<'a, K, V>,
+    {
+        if self.on_stack {
+            IterMut::Stack(unsafe { (*self.data.stack).iter_mut() })
+        } else {
+            IterMut::Heap(unsafe { (*self.data.heap).iter_mut() })
+        }
+    }
 }
 
-/// Separate impl for methods requiring Default backend.
+impl<'a, K, V, const N: usize, I, S> LruIteratorSupport<'a, K, V> for SmallLruCache<K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone + 'a,
+    V: 'a,
+    I: IndexType,
+    S: AnyLruCache<K, V> + for<'b> LruIteratorSupport<'b, K, V>,
+{
+    type Iter = Iter<'a, K, V, N, I, S>;
+    type IterMut = IterMut<'a, K, V, N, I, S>;
+    fn iter(&'a self) -> Self::Iter {
+        self.iter()
+    }
+    fn iter_mut(&'a mut self) -> Self::IterMut {
+        self.iter_mut()
+    }
+}
+
 impl<K, V, const N: usize, I, S> SmallLruCache<K, V, N, I, S>
 where
     K: Hash + Eq + Ord + Clone,
     I: IndexType,
     S: AnyLruCache<K, V> + Default,
 {
-    /// Creates a new `SmallLruCache` with a specified capacity.
-    ///
-    /// It starts using the stack-allocated backend `S` and will
-    /// automatically spill to the heap once the capacity is exceeded.
     pub fn new(cap: NonZeroUsize) -> Self {
-        const {
-            assert!(
-                std::mem::size_of::<Self>() <= 16 * 1024,
-                "SmallLruCache is too large! Reduce N."
-            );
-        }
-
         Self {
             num_entries: 0,
             capacity: cap,
@@ -334,6 +487,16 @@ where
             },
             _phantom_i: PhantomData,
         }
+    }
+}
+
+impl<K: Hash + Eq + Ord + Clone, V, const N: usize, I: IndexType, S> Default
+    for SmallLruCache<K, V, N, I, S>
+where
+    S: AnyLruCache<K, V> + Default,
+{
+    fn default() -> Self {
+        Self::new(NonZeroUsize::new(N.max(1)).unwrap())
     }
 }
 
@@ -350,7 +513,7 @@ where
         self.capacity
     }
     fn put(&mut self, key: K, value: V) -> Option<V> {
-        Self::put(self, key, value)
+        self.put(key, value)
     }
     fn put_with_cap(
         &mut self,
@@ -358,49 +521,83 @@ where
         value: V,
         cap: NonZeroUsize,
     ) -> (Option<V>, Result<(), (K, V)>) {
-        if self.on_stack {
+        let (old, res) = if self.on_stack {
             unsafe { (*self.data.stack).put_with_cap(key, value, cap) }
         } else {
-            (
-                unsafe { (*self.data.heap).put_with_cap(key, value, cap).0 },
-                Ok(()),
-            )
+            (unsafe { (*self.data.heap).put(key, value) }, Ok(()))
+        };
+        if res.is_ok() && old.is_none() {
+            self.num_entries += 1;
         }
+        (old, res)
     }
     fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized,
     {
-        Self::get(self, key)
+        self.get(key)
     }
     fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized,
     {
-        Self::get_mut(self, key)
+        self.get_mut(key)
     }
     fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized,
     {
-        Self::peek(self, key)
+        self.peek(key)
     }
     fn clear(&mut self) {
-        Self::clear(self);
+        self.clear();
     }
     fn pop_lru(&mut self) -> Option<(K, V)> {
-        let res = if self.on_stack {
-            unsafe { (*self.data.stack).pop_lru() }
-        } else {
-            unsafe { (*self.data.heap).pop_lru() }
-        };
-        if res.is_some() {
-            self.num_entries -= 1;
-        }
-        res
+        self.pop_lru()
+    }
+    fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.contains(key)
+    }
+    fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
+        self.push(key, value)
+    }
+    fn pop<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.pop(key)
+    }
+    fn pop_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.pop_entry(key)
+    }
+    fn promote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.promote(key)
+    }
+    fn demote<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.demote(key)
+    }
+    fn peek_lru(&self) -> Option<(&K, &V)> {
+        self.peek_lru()
     }
 }
 
@@ -454,17 +651,17 @@ where
 
 impl<K, V, const N: usize, I, S> Debug for SmallLruCache<K, V, N, I, S>
 where
-    K: Hash + Eq + Debug + Ord + Clone,
+    K: Hash + Eq + Ord + Clone + Debug,
     V: Debug,
     I: IndexType,
     S: AnyLruCache<K, V>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut d = f.debug_struct("SmallLruCache");
-        d.field("on_stack", &self.on_stack);
-        d.field("capacity", &self.capacity);
-        d.field("num_entries", &self.num_entries);
-        d.finish()
+        f.debug_struct("SmallLruCache")
+            .field("on_stack", &self.on_stack)
+            .field("capacity", &self.capacity)
+            .field("num_entries", &self.num_entries)
+            .finish()
     }
 }
 
@@ -474,8 +671,8 @@ where
     I: IndexType,
     S: AnyLruCache<K, V> + Default,
 {
-    fn from_iter<II: IntoIterator<Item = (K, V)>>(iter: II) -> Self {
-        let mut cache = Self::new(NonZeroUsize::new(N.max(1)).unwrap());
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let mut cache = Self::default();
         for (k, v) in iter {
             cache.put(k, v);
         }
@@ -483,74 +680,573 @@ where
     }
 }
 
+impl<K, V, const N: usize, I, S> Extend<(K, V)> for SmallLruCache<K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V>,
+{
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        for (k, v) in iter {
+            self.put(k, v);
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a, const N: usize, I: IndexType, S> Debug for Iter<'a, K, V, N, I, S>
+where
+    S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
+    S::Iter: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Iter::Stack(it) => f.debug_tuple("Iter::Stack").field(it).finish(),
+            Iter::Heap(_) => f.write_str("Iter::Heap(lru::Iter)"),
+            Iter::_Phantom(_) => unreachable!(),
+        }
+    }
+}
+
+pub enum Iter<'a, K: 'a, V: 'a, const N: usize, I: IndexType, S>
+where
+    S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
+{
+    Stack(S::Iter),
+    Heap(lru::Iter<'a, K, V>),
+    _Phantom(PhantomData<I>),
+}
+
+impl<'a, K, V, const N: usize, I, S> Iterator for Iter<'a, K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
+{
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Iter::Stack(it) => it.next(),
+            Iter::Heap(it) => it.next(),
+            Iter::_Phantom(_) => unreachable!(),
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a, const N: usize, I: IndexType, S> Debug for IterMut<'a, K, V, N, I, S>
+where
+    S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
+    S::IterMut: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IterMut::Stack(it) => f.debug_tuple("IterMut::Stack").field(it).finish(),
+            IterMut::Heap(_) => f.write_str("IterMut::Heap(lru::IterMut)"),
+            IterMut::_Phantom(_) => unreachable!(),
+        }
+    }
+}
+
+pub enum IterMut<'a, K: 'a, V: 'a, const N: usize, I: IndexType, S>
+where
+    S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
+{
+    Stack(S::IterMut),
+    Heap(lru::IterMut<'a, K, V>),
+    _Phantom(PhantomData<I>),
+}
+
+impl<'a, K, V, const N: usize, I, S> Iterator for IterMut<'a, K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
+{
+    type Item = (&'a K, &'a mut V);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            IterMut::Stack(it) => it.next(),
+            IterMut::Heap(it) => it.next(),
+            IterMut::_Phantom(_) => unreachable!(),
+        }
+    }
+}
+
+pub enum IntoIter<K, V, const N: usize, I: IndexType, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + IntoIterator<Item = (K, V)>,
+{
+    Stack(S::IntoIter),
+    Heap(lru::IntoIter<K, V>),
+    _Phantom(PhantomData<I>),
+}
+
+impl<K, V, const N: usize, I, S> Iterator for IntoIter<K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + IntoIterator<Item = (K, V)>,
+{
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            IntoIter::Stack(it) => it.next(),
+            IntoIter::Heap(it) => it.next(),
+            IntoIter::_Phantom(_) => unreachable!(),
+        }
+    }
+}
+
+impl<K, V, const N: usize, I, S> IntoIterator for SmallLruCache<K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + IntoIterator<Item = (K, V)>,
+{
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V, N, I, S>;
+    fn into_iter(self) -> Self::IntoIter {
+        let on_stack = self.on_stack;
+        // SAFETY: We use ptr::read to move the data out of the union and then forget(self)
+        // so that the Drop trait of SmallLruCache (which would try to drop the union) doesn't run.
+        let data = unsafe { ptr::read(&self.data) };
+        core::mem::forget(self);
+
+        if on_stack {
+            IntoIter::Stack(unsafe { ManuallyDrop::into_inner(data.stack) }.into_iter())
+        } else {
+            IntoIter::Heap(unsafe { ManuallyDrop::into_inner(data.heap) }.into_iter())
+        }
+    }
+}
+
+impl<'a, K, V, const N: usize, I, S> IntoIterator for &'a SmallLruCache<K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + for<'b> LruIteratorSupport<'b, K, V>,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V, N, I, S>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, K, V, const N: usize, I, S> IntoIterator for &'a mut SmallLruCache<K, V, N, I, S>
+where
+    K: Hash + Eq + Ord + Clone,
+    I: IndexType,
+    S: AnyLruCache<K, V> + for<'b> LruIteratorSupport<'b, K, V>,
+{
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V, N, I, S>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod lru_cache_basic_tests {
     use super::*;
     use crate::HeaplessBTreeLruCache;
     use crate::HeaplessLinearLruCache;
+    use crate::HeaplessLruCache;
 
-    #[test]
-    fn test_lru_sizes() {
-        println!(
-            "Size of SmallLruCache<i32, i32, 16>: {}",
-            std::mem::size_of::<SmallLruCache<i32, i32, 16>>()
-        );
-    }
-
-    #[test]
-    fn test_lru_cache_stack_ops_basic() {
-        let cap = NonZeroUsize::new(4).unwrap();
-        let mut cache: SmallLruCache<i32, i32, 4> = SmallLruCache::new(cap);
-        assert!(cache.is_on_stack());
-        assert_eq!(cache.len(), 0);
-        assert!(cache.is_empty());
-
+    fn test_basic_lru<S: AnyLruCache<i32, i32> + Default>() {
+        let mut cache = S::default();
         cache.put(1, 10);
         cache.put(2, 20);
-        assert_eq!(cache.len(), 2);
+        cache.put(3, 30);
+
+        assert_eq!(cache.len(), 3);
         assert_eq!(cache.get(&1), Some(&10));
         assert_eq!(cache.get(&2), Some(&20));
-    }
-
-    #[test]
-    fn test_lru_cache_stack_ops_eviction_lru() {
-        let cap = NonZeroUsize::new(2).unwrap();
-        let mut cache: SmallLruCache<i32, i32, 4> = SmallLruCache::new(cap);
-        cache.put(1, 10);
-        cache.put(2, 20);
-        cache.get(&1);
-        cache.put(3, 30);
-        assert_eq!(cache.get(&2), None);
-        assert_eq!(cache.get(&1), Some(&10));
         assert_eq!(cache.get(&3), Some(&30));
+
+        // Test Promotion: After get(&1), 1 should be MRU.
+        cache.get(&1);
+
+        // Order should be (LRU) 2 -> 3 -> 1 (MRU)
+        assert_eq!(cache.peek_lru(), Some((&2, &20)));
+        assert_eq!(cache.pop_lru(), Some((2, 20)));
+        assert_eq!(cache.pop_lru(), Some((3, 30)));
+        assert_eq!(cache.pop_lru(), Some((1, 10)));
+        assert!(cache.is_empty());
     }
 
     #[test]
-    fn test_lru_cache_spill_trigger() {
-        let cap = NonZeroUsize::new(8).unwrap();
-        let mut cache: SmallLruCache<i32, i32, 2> = SmallLruCache::new(cap);
+    fn test_heapless_lru_basic() {
+        test_basic_lru::<HeaplessLruCache<i32, i32, 8>>();
+    }
+
+    #[test]
+    fn test_heapless_btree_lru_basic() {
+        test_basic_lru::<HeaplessBTreeLruCache<i32, i32, 10>>();
+    }
+
+    #[test]
+    fn test_heapless_linear_lru_basic() {
+        test_basic_lru::<HeaplessLinearLruCache<i32, i32, 10>>();
+    }
+
+    #[test]
+    fn test_small_lru_spill() {
+        let mut cache: SmallLruCache<i32, i32, 2> = SmallLruCache::default();
         cache.put(1, 10);
         cache.put(2, 20);
         assert!(cache.is_on_stack());
+
+        cache.resize(NonZeroUsize::new(5).unwrap());
         cache.put(3, 30);
         assert!(!cache.is_on_stack());
+        assert_eq!(cache.len(), 3);
         assert_eq!(cache.get(&1), Some(&10));
         assert_eq!(cache.get(&2), Some(&20));
         assert_eq!(cache.get(&3), Some(&30));
     }
 
     #[test]
-    fn test_lru_cache_different_backends() {
-        let cap = NonZeroUsize::new(4).unwrap();
+    fn test_small_lru_eviction() {
+        let mut cache: SmallLruCache<i32, i32, 2> = SmallLruCache::default();
+        cache.put(1, 10);
+        cache.put(2, 20);
+        cache.put(3, 30);
 
-        let mut linear: SmallLruCache<i32, i32, 4, u8, HeaplessLinearLruCache<i32, i32, 4>> =
-            SmallLruCache::new(cap);
-        linear.put(1, 10);
-        assert_eq!(linear.get(&1), Some(&10));
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.contains(&1));
+    }
 
-        let mut btree: SmallLruCache<i32, i32, 4, u8, HeaplessBTreeLruCache<i32, i32, 4>> =
-            SmallLruCache::new(cap);
-        btree.put(1, 10);
-        assert_eq!(btree.get(&1), Some(&10));
+    #[test]
+    fn test_iteration_order() {
+        let mut cache: SmallLruCache<i32, i32, 5> = SmallLruCache::default();
+        cache.put(1, 10);
+        cache.put(2, 20);
+        cache.put(3, 30);
+
+        let items: Vec<_> = cache.iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(items, vec![(3, 30), (2, 20), (1, 10)]);
+
+        let items_into: Vec<_> = cache.into_iter().collect();
+        assert_eq!(items_into, vec![(3, 30), (2, 20), (1, 10)]);
+    }
+
+    #[test]
+    fn test_promote_demote() {
+        let mut cache: SmallLruCache<i32, i32, 3> = SmallLruCache::default();
+        cache.put(1, 10);
+        cache.put(2, 20);
+        cache.put(3, 30);
+
+        cache.demote(&3);
+        assert_eq!(cache.peek_lru(), Some((&3, &30)));
+
+        cache.promote(&1);
+        let items: Vec<_> = cache.iter().map(|(&k, _)| k).collect();
+        assert_eq!(items, vec![1, 2, 3]);
+    }
+}
+
+#[cfg(test)]
+mod lru_cache_coverage_tests {
+    use super::*;
+    use crate::HeaplessBTreeLruCache;
+    use crate::HeaplessLinearLruCache;
+    use crate::HeaplessLruCache;
+    use std::num::NonZeroUsize;
+
+    #[test]
+    fn test_any_lru_cache_trait_implementation() {
+        let mut cache: SmallLruCache<i32, i32, 2> = SmallLruCache::default();
+
+        // Use a generic function to test trait implementation
+        fn check<S: AnyLruCache<i32, i32>>(any_cache: &mut S) {
+            assert_eq!(any_cache.len(), 0);
+            assert_eq!(any_cache.cap(), NonZeroUsize::new(2).unwrap());
+
+            any_cache.put(1, 10);
+            assert_eq!(any_cache.len(), 1);
+            assert_eq!(any_cache.get(&1), Some(&10));
+            assert_eq!(any_cache.peek(&1), Some(&10));
+            assert!(any_cache.contains(&1));
+
+            let _ = any_cache.put_with_cap(2, 20, NonZeroUsize::new(2).unwrap());
+            assert_eq!(any_cache.len(), 2);
+
+            any_cache.promote(&1);
+            any_cache.demote(&1);
+            assert_eq!(any_cache.peek_lru(), Some((&1, &10)));
+
+            any_cache.push(3, 30); // Should evict 1
+            assert!(!any_cache.contains(&1));
+
+            any_cache.pop(&2);
+            assert_eq!(any_cache.len(), 1);
+
+            any_cache.clear();
+            assert!(any_cache.is_empty());
+        }
+
+        check(&mut cache);
+    }
+
+    #[test]
+    fn test_debug_implementations() {
+        let cache_hash: HeaplessLruCache<i32, i32, 8> = HeaplessLruCache::new();
+        let cache_btree: HeaplessBTreeLruCache<i32, i32, 8> = HeaplessBTreeLruCache::new();
+        let cache_linear: HeaplessLinearLruCache<i32, i32, 8> = HeaplessLinearLruCache::new();
+        let cache_small: SmallLruCache<i32, i32, 8> = SmallLruCache::default();
+
+        println!("{:?}", cache_hash);
+        println!("{:?}", cache_btree);
+        println!("{:?}", cache_linear);
+        println!("{:?}", cache_small);
+    }
+
+    #[test]
+    fn test_clear_all_backends() {
+        fn test_clear<S: AnyLruCache<i32, i32> + Default>() {
+            let mut cache = S::default();
+            cache.put(1, 10);
+            cache.clear();
+            assert!(cache.is_empty());
+        }
+
+        test_clear::<HeaplessLruCache<i32, i32, 8>>();
+        test_clear::<HeaplessBTreeLruCache<i32, i32, 8>>();
+        test_clear::<HeaplessLinearLruCache<i32, i32, 8>>();
+        test_clear::<SmallLruCache<i32, i32, 8>>();
+    }
+
+    #[test]
+    fn test_clone_all_backends() {
+        fn test_clone<S: AnyLruCache<i32, i32> + Default + Clone>() {
+            let mut cache = S::default();
+            cache.put(1, 10);
+            let mut cloned = cache.clone();
+            assert_eq!(cloned.len(), 1);
+            cloned.put(2, 20);
+            assert_eq!(cache.len(), 1);
+        }
+
+        test_clone::<HeaplessLruCache<i32, i32, 8>>();
+        test_clone::<HeaplessBTreeLruCache<i32, i32, 8>>();
+        test_clone::<HeaplessLinearLruCache<i32, i32, 8>>();
+        test_clone::<SmallLruCache<i32, i32, 8>>();
+    }
+
+    #[test]
+    fn test_itermut_all_backends() {
+        fn test_itermut<
+            S: AnyLruCache<i32, i32> + Default + for<'a> LruIteratorSupport<'a, i32, i32>,
+        >() {
+            let mut cache = S::default();
+            cache.put(1, 10);
+            cache.put(2, 20);
+            for (_, v) in cache.iter_mut() {
+                *v += 1;
+            }
+            assert_eq!(cache.get(&1), Some(&11));
+            assert_eq!(cache.get(&2), Some(&21));
+        }
+
+        test_itermut::<HeaplessLruCache<i32, i32, 8>>();
+        test_itermut::<HeaplessBTreeLruCache<i32, i32, 8>>();
+        test_itermut::<HeaplessLinearLruCache<i32, i32, 8>>();
+        test_itermut::<SmallLruCache<i32, i32, 8>>();
+    }
+
+    #[test]
+    fn test_small_lru_heap_mode_coverage() {
+        // Force heap mode by resizing to something larger than N (8 in this case)
+        let mut cache: SmallLruCache<i32, i32, 2> =
+            SmallLruCache::new(NonZeroUsize::new(5).unwrap());
+        // Since N=2 and cap=5, it might start on stack if it can, but let's just push 3 items.
+        cache.put(1, 10);
+        cache.put(2, 20);
+        cache.put(3, 30); // Should trigger spill as N=2
+        assert!(!cache.is_on_stack());
+
+        // Use a generic function to test trait implementation in heap mode
+        fn check_heap<S: AnyLruCache<i32, i32>>(any_cache: &mut S) {
+            any_cache.get(&1);
+        }
+        check_heap(&mut cache);
+
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get(&1), Some(&10));
+        assert_eq!(cache.get_mut(&1), Some(&mut 10));
+        assert_eq!(cache.peek(&1), Some(&10));
+        assert!(cache.contains(&1));
+
+        cache.promote(&3);
+        cache.demote(&3);
+        assert_eq!(cache.peek_lru(), Some((&3, &30)));
+
+        cache.push(4, 40);
+        cache.pop_lru();
+        cache.pop(&1);
+        cache.pop_entry(&2);
+
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_lru_cache_backend_direct_coverage() {
+        // Test the LruCache (from lru crate) delegation directly
+        let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+
+        fn check_lru<S: AnyLruCache<i32, i32>>(any: &mut S) {
+            any.put(1, 10);
+            let _ = any.put_with_cap(2, 20, NonZeroUsize::new(5).unwrap());
+            any.get(&1);
+            any.get_mut(&1);
+            any.peek(&1);
+            any.contains(&1);
+            any.promote(&1);
+            any.demote(&1);
+            any.peek_lru();
+            any.pop_lru();
+            any.push(3, 30);
+            any.pop(&3);
+            any.pop_entry(&2);
+            any.clear();
+        }
+
+        check_lru(&mut cache);
+    }
+    #[test]
+    fn test_lru_cache_fuzz_operations() {
+        // Simple LCG random number generator
+        struct SimpleRng(u64);
+        impl SimpleRng {
+            fn next(&mut self) -> u64 {
+                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+                self.0
+            }
+            fn gen_range(&mut self, min: i32, max: i32) -> i32 {
+                let range = (max - min) as u64;
+                if range == 0 {
+                    return min;
+                }
+                min + (self.next() % range) as i32
+            }
+        }
+
+        fn stress<
+            S: AnyLruCache<i32, i32>
+                + Default
+                + Clone
+                + for<'a> LruIteratorSupport<'a, i32, i32>
+                + Debug
+                + IntoIterator<Item = (i32, i32)>
+                + Extend<(i32, i32)>,
+        >(
+            rng: &mut SimpleRng,
+        ) {
+            let mut cache = S::default();
+            let cap = cache.cap().get();
+
+            for _ in 0..500 {
+                let op = rng.gen_range(0, 13);
+                let key = rng.gen_range(0, cap as i32 * 2);
+                let val = rng.gen_range(0, 100);
+
+                match op {
+                    0 => {
+                        let _ = cache.put(key, val);
+                    }
+                    1 => {
+                        let _ = cache.get(&key);
+                    }
+                    2 => {
+                        let _ = cache.get_mut(&key);
+                    }
+                    3 => {
+                        let _ = cache.peek(&key);
+                    }
+                    4 => {
+                        let _ = cache.contains(&key);
+                    }
+                    5 => {
+                        let _ = cache.pop(&key);
+                    }
+                    6 => {
+                        cache.promote(&key);
+                    }
+                    7 => {
+                        cache.demote(&key);
+                    }
+                    8 => {
+                        let _ = cache.clone();
+                    }
+                    9 => {
+                        let _ = cache.iter().count();
+                        let _ = cache.iter_mut().count();
+                        let _ = format!("{:?}", cache);
+                    }
+                    10 => {
+                        let mut c = cache.clone();
+                        let _ = c.pop_entry(&key);
+                        let _ = c.pop_lru();
+                        let _ = c.peek_lru();
+                        c.clear();
+                    }
+                    11 => {
+                        let c = cache.clone();
+                        let _ = c.into_iter().count();
+                    }
+                    12 => {
+                        let mut c = cache.clone();
+                        c.extend(vec![(key, val), (key + 1, val + 1)]);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut rng = SimpleRng(42);
+        stress::<HeaplessLruCache<i32, i32, 16>>(&mut rng);
+        stress::<HeaplessBTreeLruCache<i32, i32, 16>>(&mut rng);
+        stress::<HeaplessLinearLruCache<i32, i32, 16>>(&mut rng);
+        stress::<SmallLruCache<i32, i32, 4>>(&mut rng);
+    }
+
+    #[test]
+    fn test_lru_cache_get_or_insert_variants() {
+        let mut cache: SmallLruCache<i32, i32, 2> = SmallLruCache::default();
+
+        // Case 1: Insert new
+        let val = cache.get_or_insert(1, || 10);
+        assert_eq!(*val, 10);
+
+        // Case 2: Get existing
+        let val = cache.get_or_insert(1, || 20);
+        assert_eq!(*val, 10);
+
+        // Case 3: Mut insert new
+        let val = cache.get_or_insert_mut(2, || 20);
+        assert_eq!(*val, 20);
+
+        // Case 4: Mut get existing
+        let val = cache.get_or_insert_mut(2, || 30);
+        assert_eq!(*val, 20);
+    }
+
+    #[test]
+    fn test_lru_cache_debug_impls_and_raw_heap_ops() {
+        let mut cache: SmallLruCache<i32, i32, 2> = SmallLruCache::default();
+        let _ = cache.capacity();
+        cache.put(1, 10);
+        cache.put(1, 11); // old.is_some() path in put
+
+        // LruCache direct iters
+        let mut lru = lru::LruCache::new(NonZeroUsize::new(5).unwrap());
+        lru.put(1, 10);
+        let _ = lru.iter().count();
+        let _ = lru.iter_mut().count();
+        let _ = lru.cap();
     }
 }

@@ -90,3 +90,37 @@ impl IndexType for u16 {
         self == 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_index_type<I: IndexType>() {
+        let zero = I::ZERO;
+        assert!(zero.is_zero());
+        assert_eq!(zero.as_usize(), 0);
+
+        let one = zero.inc();
+        assert!(!one.is_zero());
+        assert_eq!(one.as_usize(), 1);
+
+        let zero_again = one.dec();
+        assert!(zero_again.is_zero());
+
+        let from = I::from_usize(10);
+        assert_eq!(from.as_usize(), 10);
+
+        let none = I::NONE;
+        assert_ne!(none.as_usize(), 0);
+    }
+
+    #[test]
+    fn test_u8_index() {
+        test_index_type::<u8>();
+    }
+
+    #[test]
+    fn test_u16_index() {
+        test_index_type::<u16>();
+    }
+}
