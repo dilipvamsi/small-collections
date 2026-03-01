@@ -2,7 +2,7 @@
 
 **High-performance collections optimized with Small Object Optimization (SOO).**
 
-`small_collections` provides a comprehensive suite of data structures—including `Map`, `Set`, `Vec`, `Deque`, `String`, `LRU Cache`, and more—that live entirely on the stack for small capacities and automatically "spill" to the heap when they grow larger. This drastically reduces memory allocator pressure (malloc/free) and improves cache locality.
+`small-collections` provides a comprehensive suite of data structures—including `Map`, `Set`, `Vec`, `Deque`, `String`, `LRU Cache`, and more—that live entirely on the stack for small capacities and automatically "spill" to the heap when they grow larger. This drastically reduces memory allocator pressure (malloc/free) and improves cache locality.
 
 ## 🚀 Features
 
@@ -13,9 +13,24 @@
 - **Compile-Time Safety:** Enforces strict size limits during the build process to prevent accidental stack overflows.
 - **Standard API:** Implements standard traits (`Debug`, `Display`, `FromIterator`, `Extend`, `Clone`, `Default`, `PartialEq`, `Hash`) where applicable.
 
+## 📦 Installation
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+small-collections = "0.5.0"
+```
+
+Then in your code:
+
+```rust
+use small_collections::SmallMap;
+```
+
 ## ⚙️ Optional Features
 
-`small_collections` is modular. You can enable or disable groups of collections to minimize dependency overhead:
+`small-collections` is modular. You can enable or disable groups of collections to minimize dependency overhead:
 
 | Feature       | Collections Enabled                                                                    | Dependencies |
 | :------------ | :------------------------------------------------------------------------------------- | :----------- |
@@ -47,7 +62,7 @@ Basic collections (`SmallVec`, `SmallDeque`, `SmallMap`, `SmallBTreeMap`, `Small
 
 ## 📦 Dependencies & Acknowledgments
 
-`small_collections` is built on the shoulders of giants. We use best-in-class crates for our storage and hashing backends:
+`small-collections` is built on the shoulders of giants. We use best-in-class crates for our storage and hashing backends:
 
 - **[`heapless`](https://crates.io/crates/heapless)**: Provides the foundational fixed-capacity stack storage.
 - **[`hashbrown`](https://crates.io/crates/hashbrown)**: Our primary heap-allocated map backend, utilizing the `Raw Entry API` for efficient spills.
@@ -58,9 +73,21 @@ Basic collections (`SmallVec`, `SmallDeque`, `SmallMap`, `SmallBTreeMap`, `Small
 
 ## 🛠 Usage
 
+## 🏗️ Project Structure
+
+The library is organized into specialized modules by collection type:
+
+- **`maps/`**: Hash, BTree, and Ordered Maps.
+- **`sets/`**: Hash, BTree, and Ordered Sets.
+- **`vecs/`**: Vec, Deque, and BitVec.
+- **`cache/`**: All LRU cache implementations and backends.
+- **`utils/`**: Shared utilities like `IndexType`.
+
+All collections are conveniently re-exported at the crate root.
+
 ## 📦 Collections Catalog
 
-`small_collections` covers almost all standard library collection types, optimized for stack-first storage.
+`small-collections` covers almost all standard library collection types, optimized for stack-first storage.
 
 ### 1. Sequences
 
@@ -202,7 +229,7 @@ If you see an error like _"SmallMap is too large"_, you have two options:
 
 ## ⚡ Performance Benchmarks
 
-`small_collections` is designed to be **neck-and-neck** with pure stack-allocated collections while providing the safety net of a heap spill.
+`small-collections` is designed to be **neck-and-neck** with pure stack-allocated collections while providing the safety net of a heap spill.
 
 ### 1. Standard Comparison (Small N=8)
 
@@ -260,7 +287,7 @@ _Benchmarks measured using Criterion. `Small` collections incur a negligible dis
 
 ## 🏗️ Design Rationale: Custom Stack Backends
 
-While we leverage the `heapless` crate for foundational storage, `small_collections` includes several custom-built stack-allocated engines. This was necessary to fill gaps in the ecosystem and support our **spill-to-heap** protocol:
+While we leverage the `heapless` crate for foundational storage, `small-collections` includes several custom-built stack-allocated engines. This was necessary to fill gaps in the ecosystem and support our **spill-to-heap** protocol:
 
 1.  **`HeaplessBTreeMap`**: Upstream `heapless` primarily provides `LinearMap` (O(N)) and `IndexMap`. We required a true B-Tree implementation to support sorted associative storage with $O(\log N)$ performance.
 2.  **`HeaplessLruCache`**: Map-based LRU optimized for larger stack capacities. It uses a **Struct-of-Arrays (SoA)** layout for cache efficiency and a **singly-linked free-list** embedded within the next-pointer array to achieve O(1) allocation with zero extra memory overhead.
@@ -270,13 +297,13 @@ While we leverage the `heapless` crate for foundational storage, `small_collecti
 6.  **`HeaplessBTreeLruCache`**: The **default backend** for `SmallLruCache`. Bridges the gap with $O(\log N)$ binary search on a sorted index of physical slot IDs, providing stable performance without data shifting.
 7.  **`SmallDeque`**: While `heapless` provides a `Deque`, ours uses a custom ring-buffer implementation to allow index management (head/len) to exist outside the storage union. This ensures backend independence and enables order-preserving, zero-copy spills to the heap.
 
-### Why use `small_collections`?
+### Why use `small-collections`?
 
 For bimodal workloads—where most collections are small but some grow large—the elimination of heap allocation and deallocation provides a significant speedup (up to **5.4x**). While `SmallVec` and `SmallDeque` incur a minor overhead for safety/state management, the associative collections deliver massive wins.
 
 ## 🏮 Design Philosophy
 
-`small_collections` adheres to three core principles:
+`small-collections` adheres to three core principles:
 
 1. **Hybrid Storage**: We don't reinvent the wheel. We combine the safety of `heapless` stack arrays with the battle-tested performance of `hashbrown`, `std`, and `ordermap` for the heap path.
 2. **Transparent Interoperability**: Through the `Any*` traits (e.g., `AnyMap`, `AnyString`), you can write generic code that handles both `Small*` and standard library types without performance penalties.

@@ -8,7 +8,7 @@ use bitvec::prelude::{BitOrder, Lsb0};
 use core::marker::PhantomData;
 use heapless::Vec as HVec;
 
-use crate::bitvec::AnyBitVec;
+use crate::AnyBitVec;
 
 /// A **stack-allocated** bit vector backed by a `heapless::Vec<u8, N>`.
 ///

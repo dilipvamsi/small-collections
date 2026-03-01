@@ -17,11 +17,11 @@ use std::ops::{Index, IndexMut};
 
 use ordermap::OrderMap;
 
-use crate::heapless_ordered_map::HeaplessOrderedMap;
+use crate::HeaplessOrderedMap;
 
 /// A trait for abstraction over different map types (Stack, Heap, Small).
 /// (Imported or redefined for convenience in this module)
-pub use crate::map::AnyMap;
+pub use crate::AnyMap;
 
 impl<K: Eq + Hash, V, S: std::hash::BuildHasher> AnyMap<K, V> for OrderMap<K, V, S> {
     fn len(&self) -> usize {

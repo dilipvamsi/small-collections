@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::iter::FromIterator;
 
-use crate::heapless_btree_map::{Entry, HeaplessBTreeMap};
+use crate::maps::heapless_btree_map::{Entry, HeaplessBTreeMap};
 
 /// An object-safe abstraction over B-Tree map types.
 ///

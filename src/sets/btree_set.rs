@@ -3,8 +3,8 @@
 //! [`SmallBTreeSet`] is a thin wrapper around `SmallBTreeMap<T, (), N>`,
 //! inheriting all the sorted-order guarantees and the stack→heap spill protocol.
 
-use crate::btree_map::SmallBTreeMap;
-use crate::set::AnySet;
+use crate::SmallBTreeMap;
+use crate::AnySet;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::iter::FromIterator;
@@ -110,7 +110,7 @@ where
 }
 
 pub struct Iter<'a, T: Ord> {
-    inner: crate::btree_map::Iter<'a, T, ()>,
+    inner: crate::maps::btree_map::Iter<'a, T, ()>,
 }
 
 impl<'a, T: Ord> Iterator for Iter<'a, T> {
@@ -135,7 +135,7 @@ where
 }
 
 pub struct IntoIter<T: Ord, const N: usize> {
-    inner: crate::btree_map::IntoIter<T, (), N>,
+    inner: crate::maps::btree_map::IntoIter<T, (), N>,
 }
 
 impl<T: Ord, const N: usize> Iterator for IntoIter<T, N> {

@@ -1,53 +1,45 @@
 #![cfg(feature = "lru")]
-//! Stack-allocated LRU cache using an IndexMap for $O(1)$ lookups.
+//! Stack-allocated LRU cache using a sorted index for $O(\log N)$ lookups.
 //!
 //! # Implementation details
-//! - **Stabilized IndexMap**: uses a customized `heapless` IndexMap that works on the stack.
-//! - **Doubly-linked list**: `prevs` and `nexts` arrays maintain the LRU order.
-//! - **Struct-of-Arrays (SoA)**: separate arrays for `keys` and `values` for cache efficiency.
+//! - **Sorted Index**: A `heapless::Vec<I, N>` containing physical indices, kept sorted by key.
+//! - **Doubly-linked list**: `prevs` and `nexts` maintain the LRU order.
+//! - **Struct-of-Arrays (SoA)**: separate arrays for `keys` and `values`.
 
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
 use core::ptr;
+use heapless::Vec as HeaplessVec;
 use std::borrow::Borrow;
 use std::hash::Hash;
 
-use crate::index_type::IndexType;
-use crate::lru_cache::AnyLruCache;
-use heapless::IndexMap;
-use heapless::index_map::FnvIndexMap;
+use crate::IndexType;
+use crate::AnyLruCache;
 
-pub type FnvIndexMapHasher = core::hash::BuildHasherDefault<fnv::FnvHasher>;
-
-/// A **stack-allocated LRU cache** with $O(1)$ performance.
-pub struct HeaplessLruCache<K, V, const N: usize, I: IndexType = u8> {
-    pub map: FnvIndexMap<K, I, N>,
+/// A **stack-allocated LRU cache** using binary search for $O(\log N)$ lookups.
+pub struct HeaplessBTreeLruCache<K, V, const N: usize, I: IndexType = u8> {
     pub keys: [MaybeUninit<K>; N],
     pub values: [MaybeUninit<V>; N],
     pub prevs: [I; N],
     pub nexts: [I; N],
-    pub free_head: I,
+    pub sorted_indices: HeaplessVec<I, N>,
     pub head: I,
     pub tail: I,
     pub num_entries: I,
+    pub free_head: I,
 }
 
-impl<K, V, const N: usize, I: IndexType> HeaplessLruCache<K, V, N, I>
+impl<K, V, const N: usize, I: IndexType> HeaplessBTreeLruCache<K, V, N, I>
 where
-    K: Hash + Eq + Clone,
+    K: Hash + Eq + Ord + Clone,
 {
-    /// Creates a new, empty `HeaplessLruCache`.
+    /// Creates a new, empty `HeaplessBTreeLruCache`.
     ///
     /// # Pseudo Code:
     /// ```text
-    /// initialize prevs array with NONE
-    /// nexts = [NONE; N]
-    /// idx = 0
-    /// for each slot in nexts:
-    ///     idx += 1
-    ///     slot = idx
-    /// if N > 0:
-    ///     nexts[N-1] = NONE (end of free list)
+    /// initialize prevs with NONE
+    /// initialize nexts as free-list (0->1->...->N-1->NONE)
+    /// initialize sorted_indices as empty Vec
     /// return Self { ..., free_head: 0, head: NONE, tail: NONE, num_entries: 0 }
     /// ```
     pub fn new() -> Self {
@@ -64,15 +56,15 @@ where
         }
 
         Self {
-            map: IndexMap::new(),
             keys: unsafe { MaybeUninit::uninit().assume_init() },
             values: unsafe { MaybeUninit::uninit().assume_init() },
             prevs,
             nexts,
-            free_head: if N > 0 { I::ZERO } else { I::NONE },
+            sorted_indices: HeaplessVec::new(),
             head: I::NONE,
             tail: I::NONE,
             num_entries: I::ZERO,
+            free_head: if N > 0 { I::ZERO } else { I::NONE },
         }
     }
 
@@ -89,13 +81,13 @@ where
     }
 
     /// Returns a reference to the value associated with the key and promotes it to MRU.
-    #[inline(always)]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + Eq + Ord + ?Sized,
     {
-        if let Some(&idx) = self.map.get(key) {
+        if let Ok(pos) = self.binary_search(key) {
+            let idx = self.sorted_indices[pos];
             self.promote(idx);
             Some(unsafe { &*self.values[idx.as_usize()].as_ptr() })
         } else {
@@ -104,13 +96,13 @@ where
     }
 
     /// Returns a mutable reference to the value associated with the key and promotes it to MRU.
-    #[inline(always)]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + Eq + Ord + ?Sized,
     {
-        if let Some(&idx) = self.map.get(key) {
+        if let Ok(pos) = self.binary_search(key) {
+            let idx = self.sorted_indices[pos];
             self.promote(idx);
             Some(unsafe { &mut *self.values[idx.as_usize()].as_mut_ptr() })
         } else {
@@ -119,13 +111,13 @@ where
     }
 
     /// Returns a reference to the value associated with the key without promoting it.
-    #[inline(always)]
     pub fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + Eq + Ord + ?Sized,
     {
-        if let Some(&idx) = self.map.get(key) {
+        if let Ok(pos) = self.binary_search(key) {
+            let idx = self.sorted_indices[pos];
             Some(unsafe { &*self.values[idx.as_usize()].as_ptr() })
         } else {
             None
@@ -136,68 +128,113 @@ where
     ///
     /// # Pseudo Code:
     /// ```text
-    /// if key in map:
+    /// pos = binary_search(key)
+    /// if Found(pos):
     ///     replace value
     ///     promote(idx)
     ///     return (old_value, Ok)
     ///
     /// if num_entries >= cap:
-    ///     evict LRU (tail)
-    ///     remove key from map
-    ///     detach(tail)
-    ///     return tail to free list
+    ///     idx_to_evict = tail
+    ///     evict_key = keys[idx_to_evict]
+    ///     evict_pos = binary_search(evict_key)
+    ///     sorted_indices.remove(evict_pos)
+    ///     detach(idx_to_evict)
+    ///     return idx_to_evict to free list
+    ///     num_entries -= 1
     ///
     /// if full (num_entries >= N):
     ///     return (None, Error)
     ///
     /// idx = free_head
     /// free_head = nexts[idx]
-    /// insert key into map
+    /// insert_pos = binary_search(key) (find position for sorting)
+    /// sorted_indices.insert(insert_pos, idx)
     /// write key and value to arrays[idx]
     /// attach_front(idx)
     /// num_entries += 1
     /// return (None, Ok)
     /// ```
     pub fn put(&mut self, key: K, value: V, cap: usize) -> (Option<V>, Result<(), (K, V)>) {
-        if let Some(&idx) = self.map.get(key.borrow()) {
-            let old = unsafe { ptr::replace(self.values[idx.as_usize()].as_mut_ptr(), value) };
-            self.promote(idx);
-            return (Some(old), Ok(()));
-        }
+        match self.binary_search(key.borrow()) {
+            Ok(pos) => {
+                let idx = self.sorted_indices[pos];
+                let old = unsafe { ptr::replace(self.values[idx.as_usize()].as_mut_ptr(), value) };
+                self.promote(idx);
+                (Some(old), Ok(()))
+            }
+            Err(insert_pos) => {
+                if self.len() >= cap {
+                    let lru_idx = self.tail;
+                    if lru_idx != I::NONE {
+                        // 1. Evict from sorted index (O(log N) search + O(N) shift)
+                        unsafe {
+                            let old_key = ptr::read(self.keys[lru_idx.as_usize()].as_ptr());
+                            let _old_val = ptr::read(self.values[lru_idx.as_usize()].as_ptr());
 
-        if self.len() >= cap {
-            let lru_idx = self.tail;
-            if lru_idx != I::NONE {
-                unsafe {
-                    let old_key = ptr::read(self.keys[lru_idx.as_usize()].as_ptr());
-                    let old_val = ptr::read(self.values[lru_idx.as_usize()].as_ptr());
-                    self.map.remove(old_key.borrow());
-                    self.detach(lru_idx);
-                    self.nexts[lru_idx.as_usize()] = self.free_head;
-                    self.free_head = lru_idx;
-                    self.num_entries = self.num_entries.dec();
-                    let _ = (old_key, old_val);
+                            if let Ok(pos) = self.binary_search(old_key.borrow()) {
+                                self.sorted_indices.remove(pos);
+                            }
+
+                            // 2. Detach from LRU list
+                            self.detach(lru_idx);
+
+                            // 3. Return slot to free list
+                            self.nexts[lru_idx.as_usize()] = self.free_head;
+                            self.free_head = lru_idx;
+                            self.num_entries = self.num_entries.dec();
+
+                            // Recalculate insert_pos after removal
+                            let new_insert_pos = match self.binary_search(key.borrow()) {
+                                Ok(_) => unreachable!(),
+                                Err(p) => p,
+                            };
+
+                            let final_idx = self.free_head;
+                            self.free_head = self.nexts[final_idx.as_usize()];
+                            self.sorted_indices.insert(new_insert_pos, final_idx).ok();
+                            ptr::write(self.keys[final_idx.as_usize()].as_mut_ptr(), key);
+                            ptr::write(self.values[final_idx.as_usize()].as_mut_ptr(), value);
+                            self.attach_front(final_idx);
+                            self.num_entries = self.num_entries.inc();
+                            return (None, Ok(()));
+                        }
+                    }
                 }
+
+                if self.len() >= N {
+                    return (None, Err((key, value)));
+                }
+
+                let idx = self.free_head;
+                self.free_head = self.nexts[idx.as_usize()];
+                self.sorted_indices.insert(insert_pos, idx).ok();
+                unsafe {
+                    ptr::write(self.keys[idx.as_usize()].as_mut_ptr(), key);
+                    ptr::write(self.values[idx.as_usize()].as_mut_ptr(), value);
+                }
+                self.attach_front(idx);
+                self.num_entries = self.num_entries.inc();
+                (None, Ok(()))
             }
         }
-
-        if self.len() >= N {
-            return (None, Err((key, value)));
-        }
-
-        let idx = self.free_head;
-        self.free_head = self.nexts[idx.as_usize()];
-        self.map.insert(key.clone(), idx).ok();
-        unsafe {
-            ptr::write(self.keys[idx.as_usize()].as_mut_ptr(), key);
-            ptr::write(self.values[idx.as_usize()].as_mut_ptr(), value);
-        }
-        self.attach_front(idx);
-        self.num_entries = self.num_entries.inc();
-        (None, Ok(()))
     }
 
-    /// Moves an existing node to the front of the list (MRU).
+    /// Binary search for a key in the sorted index.
+    ///
+    /// Returns `Ok(pos)` if the key exists at `sorted_indices[pos]`,
+    /// or `Err(pos)` with the insertion position to maintain sort order.
+    fn binary_search<Q>(&self, key: &Q) -> Result<usize, usize>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.sorted_indices.as_slice().binary_search_by(|&idx| {
+            let k = unsafe { &*self.keys[idx.as_usize()].as_ptr() };
+            k.borrow().cmp(key)
+        })
+    }
+
     fn promote(&mut self, idx: I) {
         if idx != self.head {
             self.detach(idx);
@@ -205,7 +242,6 @@ where
         }
     }
 
-    /// Removes a node from the doubly-linked list.
     fn detach(&mut self, idx: I) {
         let (p, n) = (self.prevs[idx.as_usize()], self.nexts[idx.as_usize()]);
         if p != I::NONE {
@@ -220,7 +256,6 @@ where
         }
     }
 
-    /// Adds a node to the front of the list (MRU).
     fn attach_front(&mut self, idx: I) {
         self.prevs[idx.as_usize()] = I::NONE;
         self.nexts[idx.as_usize()] = self.head;
@@ -233,15 +268,15 @@ where
     }
 }
 
-impl<K: Hash + Eq + Clone, V, const N: usize, I: IndexType> Default
-    for HeaplessLruCache<K, V, N, I>
+impl<K: Hash + Eq + Ord + Clone, V, const N: usize, I: IndexType> Default
+    for HeaplessBTreeLruCache<K, V, N, I>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V, const N: usize, I: IndexType> AnyLruCache<K, V> for HeaplessLruCache<K, V, N, I>
+impl<K, V, const N: usize, I: IndexType> AnyLruCache<K, V> for HeaplessBTreeLruCache<K, V, N, I>
 where
     K: Hash + Eq + Ord + Clone,
 {
@@ -294,7 +329,7 @@ where
             }
             curr = next;
         }
-        self.map.clear();
+        self.sorted_indices.clear();
         self.head = I::NONE;
         self.tail = I::NONE;
         self.num_entries = I::ZERO;
@@ -314,7 +349,11 @@ where
             let idx = self.tail;
             let key = unsafe { ptr::read(self.keys[idx.as_usize()].as_ptr()) };
             let val = unsafe { ptr::read(self.values[idx.as_usize()].as_ptr()) };
-            self.map.remove(key.borrow());
+
+            if let Ok(pos) = self.binary_search(key.borrow()) {
+                self.sorted_indices.remove(pos);
+            }
+
             self.detach(idx);
             self.nexts[idx.as_usize()] = self.free_head;
             self.free_head = idx;
@@ -326,9 +365,9 @@ where
     }
 }
 
-impl<K, V, const N: usize, I: IndexType> Clone for HeaplessLruCache<K, V, N, I>
+impl<K, V, const N: usize, I: IndexType> Clone for HeaplessBTreeLruCache<K, V, N, I>
 where
-    K: Hash + Eq + Clone,
+    K: Hash + Eq + Ord + Clone,
     V: Clone,
 {
     fn clone(&self) -> Self {
@@ -348,20 +387,20 @@ where
         }
 
         Self {
-            map: self.map.clone(),
             keys: new_keys,
             values: new_vals,
             prevs: self.prevs,
             nexts: self.nexts,
-            free_head: self.free_head,
+            sorted_indices: self.sorted_indices.clone(),
             head: self.head,
             tail: self.tail,
             num_entries: self.num_entries,
+            free_head: self.free_head,
         }
     }
 }
 
-impl<K, V, const N: usize, I: IndexType> Drop for HeaplessLruCache<K, V, N, I> {
+impl<K, V, const N: usize, I: IndexType> Drop for HeaplessBTreeLruCache<K, V, N, I> {
     fn drop(&mut self) {
         let mut curr = self.head;
         while curr != I::NONE {
@@ -373,5 +412,15 @@ impl<K, V, const N: usize, I: IndexType> Drop for HeaplessLruCache<K, V, N, I> {
             }
             curr = next;
         }
+    }
+}
+
+impl<K, V, const N: usize, I: IndexType> std::fmt::Debug for HeaplessBTreeLruCache<K, V, N, I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeaplessBTreeLruCache")
+            .field("num_entries", &self.num_entries)
+            .field("head", &self.head)
+            .field("tail", &self.tail)
+            .finish()
     }
 }

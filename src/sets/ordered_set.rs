@@ -5,8 +5,8 @@
 //! the insertion-order-preserving semantics and the stack→heap spill protocol defined
 //! in [`ordered_map`](crate::ordered_map).
 
-use crate::ordered_map::SmallOrderedMap;
-use crate::set::AnySet;
+use crate::SmallOrderedMap;
+use crate::AnySet;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -188,7 +188,7 @@ where
 }
 
 pub struct SmallSetIntoIter<T: Eq, const N: usize> {
-    iter: crate::ordered_map::SmallMapIntoIter<T, (), N>,
+    iter: crate::maps::ordered_map::SmallMapIntoIter<T, (), N>,
 }
 
 impl<T, const N: usize> Iterator for SmallSetIntoIter<T, N>
@@ -202,7 +202,7 @@ where
 }
 
 pub struct SetRefIter<'a, T> {
-    iter: crate::ordered_map::SmallMapIter<'a, T, ()>,
+    iter: crate::maps::ordered_map::SmallMapIter<'a, T, ()>,
 }
 
 impl<'a, T> Iterator for SetRefIter<'a, T> {

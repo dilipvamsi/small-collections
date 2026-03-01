@@ -12,8 +12,8 @@ use core::ptr;
 use std::borrow::Borrow;
 use std::hash::Hash;
 
-use crate::index_type::IndexType;
-use crate::lru_cache::AnyLruCache;
+use crate::IndexType;
+use crate::AnyLruCache;
 
 /// A **stack-allocated LRU cache** using linear scanning.
 pub struct HeaplessLinearLruCache<K, V, const N: usize, I: IndexType = u8> {

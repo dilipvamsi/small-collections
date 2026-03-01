@@ -16,8 +16,8 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
-use crate::heapless_btree_lru_cache::HeaplessBTreeLruCache;
-use crate::index_type::IndexType;
+use crate::HeaplessBTreeLruCache;
+use crate::IndexType;
 
 /// An object-safe abstraction over LRU cache types.
 ///
@@ -486,8 +486,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heapless_btree_lru_cache::HeaplessBTreeLruCache;
-    use crate::heapless_linear_lru_cache::HeaplessLinearLruCache;
+    use crate::HeaplessBTreeLruCache;
+    use crate::HeaplessLinearLruCache;
 
     #[test]
     fn test_lru_sizes() {

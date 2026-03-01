@@ -1,7 +1,7 @@
 #![cfg(feature = "ordered")]
 //! Stack-allocated insertion-order map.
 //!
-//! This module is the **stack half** of [`SmallOrderedMap`](crate::ordered_map::SmallOrderedMap).
+//! This module is the **stack half** of [`SmallOrderedMap`](crate::SmallOrderedMap).
 //! It wraps `heapless::LinearMap` and adds full [`Borrow`]-based lookup and a `remove` that
 //! preserves insertion order, returning `Err((key, value))` when the inner map is full so
 //! the caller can transparently *spill* to a heap `OrderMap`.

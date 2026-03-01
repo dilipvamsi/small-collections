@@ -7,7 +7,7 @@
 //! [`AnySet`] is an object-safe trait implemented by `SmallSet`, `HashSet`, and `BTreeSet`
 //! so that set-algebra methods can accept any of these types as the `other` argument.
 
-use crate::map::SmallMap;
+use crate::SmallMap;
 use std::borrow::Borrow;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::{self, Debug};
@@ -320,7 +320,7 @@ impl<T: Eq + Hash, const N: usize> IntoIterator for SmallSet<T, N> {
 /// A consuming iterator for `SmallSet`.
 pub struct SmallSetIntoIter<T, const N: usize> {
     // We reuse the map's iterator logic. It yields (K, V).
-    iter: crate::map::SmallMapIntoIter<T, (), N>,
+    iter: crate::SmallMapIntoIter<T, (), N>,
 }
 
 impl<T, const N: usize> Iterator for SmallSetIntoIter<T, N> {
@@ -387,10 +387,10 @@ impl<T, const N: usize> Eq for SmallSet<T, N> where T: Eq + Hash + Clone {}
 /// An iterator over the references to values in a SmallSet.
 pub struct SetRefIter<'a, T> {
     // We wrap the underlying map iterator
-    iter: crate::map::SmallMapIter<'a, T, ()>,
+    iter: crate::SmallMapIter<'a, T, ()>,
 }
 
-impl<'a, T> Iterator for SetRefIter<'a, T> {
+impl<'a, T: 'a> Iterator for SetRefIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
