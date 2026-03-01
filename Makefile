@@ -42,3 +42,7 @@ leak-check-asan:
 
 # Alternative: run coverage with tarpaulin (alias)
 tarpaulin: coverage
+
+# Checks if the functions are missing the comments
+missing-docs:
+	RUSTFLAGS="-W missing_docs" cargo check

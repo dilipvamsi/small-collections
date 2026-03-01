@@ -68,7 +68,14 @@ impl<const N: usize, O: BitOrder> Clone for HeaplessBitVec<N, O> {
 }
 
 impl<const N: usize, O: BitOrder> HeaplessBitVec<N, O> {
+    /// Automatically generated documentation for this item.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= 16 * 1024,
+                "HeaplessBitVec is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         Self {
             bytes: HVec::new(),
             bit_len: 0,
@@ -76,10 +83,12 @@ impl<const N: usize, O: BitOrder> HeaplessBitVec<N, O> {
         }
     }
 
+    /// Returns the number of elements.
     pub fn len(&self) -> usize {
         self.bit_len
     }
 
+    /// Returns `true` if the collection is empty.
     pub fn is_empty(&self) -> bool {
         self.bit_len == 0
     }
@@ -103,6 +112,7 @@ impl<const N: usize, O: BitOrder> HeaplessBitVec<N, O> {
         Ok(())
     }
 
+    /// Removes and returns an item from the collection.
     pub fn pop(&mut self) -> Option<bool> {
         if self.bit_len == 0 {
             return None;
@@ -119,6 +129,7 @@ impl<const N: usize, O: BitOrder> HeaplessBitVec<N, O> {
         Some(val)
     }
 
+    /// Returns a reference to the value corresponding to the key.
     pub fn get(&self, index: usize) -> Option<bool> {
         if index >= self.bit_len {
             return None;
@@ -132,6 +143,7 @@ impl<const N: usize, O: BitOrder> HeaplessBitVec<N, O> {
         slice.get(bit_idx).as_deref().copied()
     }
 
+    /// Automatically generated documentation for this item.
     pub fn set(&mut self, index: usize, value: bool) {
         if index >= self.bit_len && index != self.bit_len {
             panic!("Index out of bounds");

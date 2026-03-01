@@ -109,6 +109,7 @@ where
     }
 }
 
+/// A structure representing `Iter`.
 pub struct Iter<'a, T: Ord> {
     inner: crate::maps::btree_map::Iter<'a, T, ()>,
 }
@@ -134,6 +135,7 @@ where
     }
 }
 
+/// A structure representing `IntoIter`.
 pub struct IntoIter<T: Ord, const N: usize> {
     inner: crate::maps::btree_map::IntoIter<T, (), N>,
 }

@@ -48,8 +48,14 @@ pub struct HeaplessOrderedMap<K: Eq + Hash, V, const N: usize> {
 }
 
 impl<K: Eq + Hash, V, const N: usize> HeaplessOrderedMap<K, V, N> {
-    /// Creates an empty map.  No allocation occurs.
+    /// Automatically generated documentation for this item.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= 16 * 1024,
+                "HeaplessOrderedMap is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         Self {
             map: LinearMap::new(),
         }

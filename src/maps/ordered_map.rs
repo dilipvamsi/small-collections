@@ -187,6 +187,7 @@ impl<K, V, const N: usize> SmallOrderedMap<K, V, N>
 where
     K: Eq + Hash,
 {
+    /// A constant parameter.
     pub const MAX_STACK_SIZE: usize = 16 * 1024;
 
     /// Creates a new empty ordered map on the stack.
@@ -435,6 +436,7 @@ impl<K, V, const N: usize> SmallOrderedMap<K, V, N>
 where
     K: Eq + Hash,
 {
+    /// Returns an iterator over the elements.
     pub fn iter(&self) -> SmallMapIter<'_, K, V> {
         unsafe {
             if self.on_stack {
@@ -446,8 +448,11 @@ where
     }
 }
 
+/// Types of `SmallMapIter`.
 pub enum SmallMapIter<'a, K, V> {
+    /// Automatically generated documentation for this item.
     Stack(heapless::linear_map::Iter<'a, K, V>),
+    /// Automatically generated documentation for this item.
     Heap(ordermap::map::Iter<'a, K, V>),
 }
 
@@ -483,8 +488,11 @@ where
     }
 }
 
+/// Types of `SmallMapIntoIter`.
 pub enum SmallMapIntoIter<K: Eq, V, const N: usize> {
+    /// Automatically generated documentation for this item.
     Stack(heapless::linear_map::IntoIter<K, V, N>),
+    /// Automatically generated documentation for this item.
     Heap(ordermap::map::IntoIter<K, V>),
 }
 

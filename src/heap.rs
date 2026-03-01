@@ -16,13 +16,19 @@ use std::fmt::{Debug, Formatter, Result};
 
 /// A trait for abstraction over different priority queue types (Stack, Heap, Small).
 pub trait AnyHeap<T> {
+    /// Returns the number of elements in the heap.
     fn len(&self) -> usize;
+    /// Returns `true` if the heap is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Pushes an item onto the heap.
     fn push(&mut self, item: T);
+    /// Removes the greatest (or smallest, depending on the heap type) item from the heap and returns it.
     fn pop(&mut self) -> Option<T>;
+    /// Returns a reference to the greatest (or smallest) item in the heap.
     fn peek(&self) -> Option<&T>;
+    /// Clears the heap, removing all values.
     fn clear(&mut self);
 }
 
@@ -49,10 +55,15 @@ pub use heapless::binary_heap::{Kind, Max, Min};
 
 /// Internal trait to bridge heapless::Kind and std::collections::BinaryHeap.
 pub trait HeapKind<T: Ord>: Kind {
+    /// The actual element type stored inside the heap format.
     type Element: Ord;
+    /// Wraps an item to its `Element` representation.
     fn wrap(item: T) -> Self::Element;
+    /// Unwraps an `Element` back to the raw item.
     fn unwrap(item: Self::Element) -> T;
+    /// Wraps a reference to an item.
     fn wrap_ref(item: &T) -> &Self::Element;
+    /// Unwraps a reference to an `Element`.
     fn unwrap_ref(item: &Self::Element) -> &T;
 }
 
@@ -144,6 +155,7 @@ where
     T: Ord,
     K: Kind + HeapKind<T>,
 {
+    /// The maximum allowed stack size in bytes (16 KB).
     pub const MAX_STACK_SIZE: usize = 16 * 1024;
 
     /// Creates a new empty binary heap.
@@ -397,11 +409,14 @@ where
 
 // --- Wrapper Types ---
 
+/// A mutable representation of the top element of the heap.
 pub enum SmallPeekMut<'a, T, const N: usize, K: Kind + HeapKind<T>>
 where
     T: Ord,
 {
+    /// Mutable representation of the top element on the stack heap.
     Stack(heapless::binary_heap::PeekMut<'a, T, K, N>),
+    /// Mutable representation of the top element on the std heap.
     Heap(std::collections::binary_heap::PeekMut<'a, K::Element>),
 }
 
@@ -448,6 +463,7 @@ where
     T: Ord,
     K: Kind + HeapKind<T>,
 {
+    /// Removes the peeked value from the heap and returns it.
     pub fn pop(self) -> T {
         match self {
             SmallPeekMut::Stack(p) => heapless::binary_heap::PeekMut::pop(p),
@@ -458,6 +474,7 @@ where
 
 // --- Iterators ---
 
+/// An owning iterator over the elements of a `SmallBinaryHeap`.
 pub struct IntoIter<T, const N: usize, K>
 where
     T: Ord,
@@ -506,11 +523,14 @@ where
     }
 }
 
+/// An iterator over the elements of a `SmallBinaryHeap`.
 pub enum SmallHeapIter<'a, T, K: Kind + HeapKind<T>>
 where
     T: Ord,
 {
+    /// Stack iterator.
     Stack(core::slice::Iter<'a, T>),
+    /// Heap iterator.
     Heap(std::collections::binary_heap::Iter<'a, K::Element>),
 }
 
@@ -533,6 +553,7 @@ where
     T: Ord,
     K: Kind + HeapKind<T>,
 {
+    /// Returns an iterator visiting all values in the underlying vector, in arbitrary order.
     pub fn iter(&self) -> SmallHeapIter<'_, T, K> {
         unsafe {
             if self.on_stack {

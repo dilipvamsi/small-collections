@@ -45,14 +45,23 @@ use crate::IndexType;
 ///    f. Attach `idx` to `head` (MRU).
 /// ```
 pub struct HeaplessBTreeLruCache<K, V, const N: usize, I: IndexType = u8> {
+    /// Automatically generated documentation for this item.
     pub keys: [MaybeUninit<K>; N],
+    /// Automatically generated documentation for this item.
     pub values: [MaybeUninit<V>; N],
+    /// Automatically generated documentation for this item.
     pub prevs: [I; N],
+    /// Automatically generated documentation for this item.
     pub nexts: [I; N],
+    /// Automatically generated documentation for this item.
     pub sorted_indices: HeaplessVec<I, N>,
+    /// Automatically generated documentation for this item.
     pub head: I,
+    /// Automatically generated documentation for this item.
     pub tail: I,
+    /// Automatically generated documentation for this item.
     pub num_entries: I,
+    /// Automatically generated documentation for this item.
     pub free_head: I,
 }
 
@@ -60,7 +69,14 @@ impl<K, V, const N: usize, I: IndexType> HeaplessBTreeLruCache<K, V, N, I>
 where
     K: Hash + Eq + Ord + Clone,
 {
+    /// Automatically generated documentation for this item.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= 16 * 1024,
+                "HeaplessBTreeLruCache is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         let prevs = [I::NONE; N];
         let mut nexts = [I::NONE; N];
         let mut idx = I::ZERO;
@@ -85,16 +101,19 @@ where
         }
     }
 
+    /// Returns the number of elements.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.num_entries.as_usize()
     }
 
+    /// Returns `true` if the collection is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.num_entries.is_zero()
     }
 
+    /// Returns a reference to the value corresponding to the key.
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -109,6 +128,7 @@ where
         }
     }
 
+    /// Returns a reference to the value corresponding to the key.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -123,6 +143,7 @@ where
         }
     }
 
+    /// Returns a reference to the next item.
     pub fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -136,6 +157,7 @@ where
         }
     }
 
+    /// Returns a reference to the next item.
     pub fn peek_lru(&self) -> Option<(&K, &V)> {
         if self.tail != I::NONE {
             let idx = self.tail.as_usize();
@@ -145,6 +167,7 @@ where
         }
     }
 
+    /// Returns an iterator over the elements.
     pub fn iter(&self) -> Iter<'_, K, V, N, I> {
         Iter {
             cache: self,
@@ -153,6 +176,7 @@ where
         }
     }
 
+    /// Returns an iterator over the elements.
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V, N, I> {
         IterMut {
             curr: self.head,
@@ -164,6 +188,7 @@ where
         }
     }
 
+    /// Pushes a key-value pair, updating the LRU list.
     pub fn put(&mut self, key: K, value: V, cap: usize) -> (Option<V>, Result<(), (K, V)>) {
         match self.binary_search(key.borrow()) {
             Ok(pos) => {
@@ -467,6 +492,7 @@ where
     }
 }
 
+/// A structure representing `Iter`.
 #[derive(Debug)]
 pub struct Iter<'a, K: 'a, V: 'a, const N: usize, I: IndexType> {
     cache: &'a HeaplessBTreeLruCache<K, V, N, I>,
@@ -498,6 +524,7 @@ impl<'a, K, V, const N: usize, I: IndexType> Iterator for Iter<'a, K, V, N, I> {
 
 impl<'a, K, V, const N: usize, I: IndexType> ExactSizeIterator for Iter<'a, K, V, N, I> {}
 
+/// A structure representing `IterMut`.
 #[derive(Debug)]
 pub struct IterMut<'a, K: 'a, V: 'a, const N: usize, I: IndexType> {
     curr: I,
@@ -530,6 +557,7 @@ impl<'a, K, V, const N: usize, I: IndexType> Iterator for IterMut<'a, K, V, N, I
 
 impl<'a, K, V, const N: usize, I: IndexType> ExactSizeIterator for IterMut<'a, K, V, N, I> {}
 
+/// A structure representing `IntoIter`.
 pub struct IntoIter<K, V, const N: usize, I: IndexType> {
     cache: HeaplessBTreeLruCache<K, V, N, I>,
 }

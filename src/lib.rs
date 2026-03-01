@@ -31,6 +31,12 @@
 //! v.extend(vec![3, 4, 5]);   // Exceeds capacity of 4
 //! assert!(!v.is_on_stack()); // Spilled to heap
 //! assert_eq!(v.pop(), Some(5));
+//!
+//! // Dynamic trait usage via AnyVec
+//! fn print_len<T>(v: &impl AnyVec<T>) {
+//!     assert_eq!(v.len(), 4);
+//! }
+//! print_len(&v);
 //! ```
 //!
 //! ### SmallDeque
@@ -151,10 +157,15 @@
 
 // --- Module Declarations ---
 
+/// Exposes cache collection module.
 pub mod cache;
+/// Exposes maps collection module.
 pub mod maps;
+/// Exposes sets collection module.
 pub mod sets;
+/// Exposes utils collection module.
 pub mod utils;
+/// Exposes vecs collection module.
 pub mod vecs;
 
 pub mod heap;

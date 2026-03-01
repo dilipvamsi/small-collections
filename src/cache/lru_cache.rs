@@ -87,9 +87,13 @@ pub trait AnyLruCache<K, V> {
 
 /// Helper trait for backends that support iteration.
 pub trait LruIteratorSupport<'a, K: 'a, V: 'a> {
+    /// The associated specific type.
     type Iter: Iterator<Item = (&'a K, &'a V)>;
+    /// The associated specific type.
     type IterMut: Iterator<Item = (&'a K, &'a mut V)>;
+    /// Returns an iterator over the elements.
     fn iter(&'a self) -> Self::Iter;
+    /// Returns an iterator over the elements.
     fn iter_mut(&'a mut self) -> Self::IterMut;
 }
 
@@ -192,11 +196,19 @@ impl<'a, K: Hash + Eq + Ord + 'a, V: 'a> LruIteratorSupport<'a, K, V> for LruCac
     }
 }
 
+/// Automatically generated documentation for this item.
 pub union LruData<K, V, S> {
+    /// Automatically generated documentation for this item.
     pub stack: ManuallyDrop<S>,
+    /// Automatically generated documentation for this item.
     pub heap: ManuallyDrop<LruCache<K, V>>,
 }
 
+/// A structure representing `SmallLruCache`.
+///
+/// This LRU cache limits its entries natively using a stack layout up to size `N`.
+/// Beyond `N`, operations will cause the cache to spill transparently into a heap
+/// allocated `lru::LruCache`.
 pub struct SmallLruCache<
     K,
     V,
@@ -475,6 +487,7 @@ where
         }
     }
 
+    /// Returns an iterator over the elements.
     pub fn iter(&self) -> Iter<'_, K, V, N, I, S>
     where
         for<'a> S: LruIteratorSupport<'a, K, V>,
@@ -486,6 +499,7 @@ where
         }
     }
 
+    /// Returns an iterator over the elements.
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V, N, I, S>
     where
         for<'a> S: LruIteratorSupport<'a, K, V>,
@@ -521,7 +535,14 @@ where
     I: IndexType,
     S: AnyLruCache<K, V> + Default,
 {
+    /// Automatically generated documentation for this item.
     pub fn new(cap: NonZeroUsize) -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= 16 * 1024,
+                "SmallLruCache is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         Self {
             num_entries: 0,
             capacity: cap,
@@ -751,12 +772,16 @@ where
     }
 }
 
+/// Types of `Iter`.
 pub enum Iter<'a, K: 'a, V: 'a, const N: usize, I: IndexType, S>
 where
     S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
 {
+    /// Automatically generated documentation for this item.
     Stack(S::Iter),
+    /// Automatically generated documentation for this item.
     Heap(lru::Iter<'a, K, V>),
+    /// Automatically generated documentation for this item.
     _Phantom(PhantomData<I>),
 }
 
@@ -790,12 +815,16 @@ where
     }
 }
 
+/// Types of `IterMut`.
 pub enum IterMut<'a, K: 'a, V: 'a, const N: usize, I: IndexType, S>
 where
     S: AnyLruCache<K, V> + LruIteratorSupport<'a, K, V>,
 {
+    /// Automatically generated documentation for this item.
     Stack(S::IterMut),
+    /// Automatically generated documentation for this item.
     Heap(lru::IterMut<'a, K, V>),
+    /// Automatically generated documentation for this item.
     _Phantom(PhantomData<I>),
 }
 
@@ -815,14 +844,18 @@ where
     }
 }
 
+/// Types of `IntoIter`.
 pub enum IntoIter<K, V, const N: usize, I: IndexType, S>
 where
     K: Hash + Eq + Ord + Clone,
     I: IndexType,
     S: AnyLruCache<K, V> + IntoIterator<Item = (K, V)>,
 {
+    /// Automatically generated documentation for this item.
     Stack(S::IntoIter),
+    /// Automatically generated documentation for this item.
     Heap(lru::IntoIter<K, V>),
+    /// Automatically generated documentation for this item.
     _Phantom(PhantomData<I>),
 }
 

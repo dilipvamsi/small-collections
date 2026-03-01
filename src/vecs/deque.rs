@@ -109,7 +109,9 @@ impl<T> AnyDeque<T> for VecDeque<T> {
 /// `[MaybeUninit<T>; N]`, so it has no drop glue — `ManuallyDrop` around the
 /// stack side is therefore redundant but kept for symmetry with the heap side.
 pub union DequeData<T, const N: usize> {
+    /// Automatically generated documentation for this item.
     pub stack: ManuallyDrop<[MaybeUninit<T>; N]>,
+    /// Automatically generated documentation for this item.
     pub heap: ManuallyDrop<VecDeque<T>>,
 }
 

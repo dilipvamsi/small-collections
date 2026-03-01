@@ -17,15 +17,23 @@ use std::ops::{Deref, DerefMut};
 
 /// A trait for abstraction over different string types (Stack, Heap, Small).
 pub trait AnyString {
+    /// Returns a string slice representing the contents.
     fn as_str(&self) -> &str;
+    /// Returns the number of elements.
     fn len(&self) -> usize;
+    /// Returns `true` if the collection is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Pushes an item into the collection.
     fn push_str(&mut self, s: &str);
+    /// Pushes an item into the collection.
     fn push(&mut self, ch: char);
+    /// Clears all elements from the collection.
     fn clear(&mut self);
+    /// Removes and returns an item from the collection.
     fn pop(&mut self) -> Option<char>;
+    /// Truncates the collection to a specific length.
     fn truncate(&mut self, new_len: usize);
 }
 

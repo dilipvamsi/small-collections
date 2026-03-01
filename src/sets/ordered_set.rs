@@ -187,6 +187,7 @@ where
     }
 }
 
+/// A structure representing `SmallSetIntoIter`.
 pub struct SmallSetIntoIter<T: Eq, const N: usize> {
     iter: crate::maps::ordered_map::SmallMapIntoIter<T, (), N>,
 }
@@ -201,6 +202,7 @@ where
     }
 }
 
+/// A structure representing `SetRefIter`.
 pub struct SetRefIter<'a, T> {
     iter: crate::maps::ordered_map::SmallMapIter<'a, T, ()>,
 }

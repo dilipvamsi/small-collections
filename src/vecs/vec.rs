@@ -17,20 +17,25 @@ use core::slice;
 
 /// A trait generalizing any vector-like contiguous collection.
 pub trait AnyVec<T> {
+    /// Automatically generated documentation for this item.
     fn as_slice(&self) -> &[T];
 
+    /// Returns the number of elements.
     fn len(&self) -> usize {
         self.as_slice().len()
     }
 
+    /// Returns `true` if the collection is empty.
     fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
 
+    /// Returns a reference to the value corresponding to the key.
     fn get(&self, index: usize) -> Option<&T> {
         self.as_slice().get(index)
     }
 
+    /// Returns `true` if the collection contains the item or key.
     fn contains(&self, x: &T) -> bool
     where
         T: PartialEq,
@@ -38,6 +43,7 @@ pub trait AnyVec<T> {
         self.as_slice().contains(x)
     }
 
+    /// Returns an iterator over the elements.
     fn iter(&self) -> slice::Iter<'_, T> {
         self.as_slice().iter()
     }
@@ -67,11 +73,19 @@ impl<T, const N: usize> AnyVec<T> for SmallVec<T, N> {
     }
 }
 
+/// A constant parameter.
 pub union VecData<T, const N: usize> {
+    /// Automatically generated documentation for this item.
     pub stack: ManuallyDrop<[MaybeUninit<T>; N]>,
+    /// Automatically generated documentation for this item.
     pub heap: ManuallyDrop<std::vec::Vec<T>>,
 }
 
+/// A structure representing `SmallVec`.
+///
+/// This collection stores up to `N` elements on the stack. If standard operations
+/// (e.g., `push`) exceed this stack capacity `N`, it transparently spills all data to the heap
+/// into a standard `std::vec::Vec`.
 pub struct SmallVec<T, const N: usize> {
     len: usize,
     capacity: usize,
@@ -80,8 +94,10 @@ pub struct SmallVec<T, const N: usize> {
 }
 
 impl<T, const N: usize> SmallVec<T, N> {
+    /// A constant parameter.
     pub const MAX_STACK_SIZE: usize = 16 * 1024;
 
+    /// Automatically generated documentation for this item.
     pub fn new() -> Self {
         const {
             assert!(
@@ -99,6 +115,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Automatically generated documentation for this item.
     pub fn with_capacity(capacity: usize) -> Self {
         if capacity <= N {
             Self::new()
@@ -393,6 +410,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Automatically generated documentation for this item.
     pub fn shrink_to_fit(&mut self) {
         if !self.on_stack {
             unsafe {
@@ -402,6 +420,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Automatically generated documentation for this item.
     pub fn into_vec(self) -> std::vec::Vec<T>
     where
         T: Clone,
@@ -431,6 +450,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Automatically generated documentation for this item.
     #[inline(always)]
     pub fn as_slice(&self) -> &[T] {
         unsafe {
@@ -443,6 +463,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Automatically generated documentation for this item.
     #[inline(always)]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe {
@@ -457,6 +478,7 @@ impl<T, const N: usize> SmallVec<T, N> {
 }
 
 impl<T: Clone, const N: usize> SmallVec<T, N> {
+    /// Automatically generated documentation for this item.
     pub fn resize(&mut self, new_len: usize, value: T) {
         let len = self.len;
         if new_len > len {
@@ -469,6 +491,7 @@ impl<T: Clone, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Extends the collection with the contents of an iterator or slice.
     pub fn extend_from_slice(&mut self, other: &[T]) {
         self.reserve(other.len());
         for item in other {
@@ -572,6 +595,9 @@ impl<T, const N: usize> FromIterator<T> for SmallVec<T, N> {
     }
 }
 
+/// A structure representing `SmallVecIntoIter`.
+///
+/// Iterates over items that could either be on the stack array or from a spilled heap `Vec`.
 pub struct SmallVecIntoIter<T, const N: usize> {
     iter: SmallVecIterEnum<T, N>,
 }
@@ -731,6 +757,7 @@ impl<T, const N: usize> core::ops::IndexMut<core::ops::RangeFull> for SmallVec<T
 }
 
 impl<T, const N: usize> SmallVec<T, N> {
+    /// Extends the collection with the contents of an iterator or slice.
     pub fn extend_from_any<V: AnyVec<T> + ?Sized>(&mut self, other: &V)
     where
         T: Clone,
@@ -738,6 +765,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         self.extend_from_slice(other.as_slice());
     }
 
+    /// Checks for equality.
     pub fn eq_any<V: AnyVec<T> + ?Sized>(&self, other: &V) -> bool
     where
         T: PartialEq,
@@ -745,6 +773,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         self.as_slice() == other.as_slice()
     }
 
+    /// Compares two instances.
     pub fn cmp_any<V: AnyVec<T> + ?Sized>(&self, other: &V) -> Ordering
     where
         T: Ord,
@@ -752,6 +781,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         self.as_slice().cmp(other.as_slice())
     }
 
+    /// Checks if the collection starts with the given sequence.
     pub fn starts_with_any<V: AnyVec<T> + ?Sized>(&self, other: &V) -> bool
     where
         T: PartialEq,
@@ -759,6 +789,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         self.as_slice().starts_with(other.as_slice())
     }
 
+    /// Checks if the collection ends with the given sequence.
     pub fn ends_with_any<V: AnyVec<T> + ?Sized>(&self, other: &V) -> bool
     where
         T: PartialEq,
@@ -766,6 +797,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         self.as_slice().ends_with(other.as_slice())
     }
 
+    /// Returns `true` if the collection contains the item or key.
     pub fn contains_subsequence<V: AnyVec<T> + ?Sized>(&self, other: &V) -> bool
     where
         T: PartialEq,

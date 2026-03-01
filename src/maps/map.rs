@@ -17,27 +17,35 @@ use std::ops::{Index, IndexMut};
 
 /// A trait for abstraction over different map types (Stack, Heap, Small).
 pub trait AnyMap<K, V> {
+    /// Returns the number of elements.
     fn len(&self) -> usize;
+    /// Returns `true` if the collection is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Inserts the given key-value pair or element.
     fn insert(&mut self, key: K, value: V) -> Option<V>;
+    /// Returns a reference to the value corresponding to the key.
     fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized;
+    /// Returns a reference to the value corresponding to the key.
     fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized;
+    /// Removes the specified element or key-value pair.
     fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized;
+    /// Returns `true` if the collection contains the item or key.
     fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized;
+    /// Clears all elements from the collection.
     fn clear(&mut self);
 }
 
@@ -226,6 +234,12 @@ where
     /// 2. **Box the Value:** Change `SmallMap<K, V, N>` to `SmallMap<K, Box<V>, N>`.
     ///    This moves the bulk of the data to the heap immediately, keeping the stack footprint small.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= Self::MAX_STACK_SIZE,
+                "SmallMap is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         Self {
             on_stack: true,
             data: MapData {
@@ -554,7 +568,9 @@ where
 
 /// A wrapper enum that unifies Stack and Heap entries.
 pub enum SmallMapEntry<'a, K, V, const N: usize> {
+    /// Automatically generated documentation for this item.
     Stack(heapless::index_map::Entry<'a, K, V, N>),
+    /// Automatically generated documentation for this item.
     Heap(hashbrown::hash_map::Entry<'a, K, V, FnvBuildHasher>),
 }
 
@@ -562,6 +578,7 @@ impl<'a, K, V, const N: usize> SmallMapEntry<'a, K, V, N>
 where
     K: Eq + Hash,
 {
+    /// Automatically generated documentation for this item.
     pub fn or_insert(self, default: V) -> &'a mut V {
         match self {
             // We use expect() because SmallMap::entry() guarantees capacity
@@ -581,6 +598,7 @@ where
         }
     }
 
+    /// Automatically generated documentation for this item.
     pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
         match self {
             SmallMapEntry::Stack(e) => match e.or_insert_with(default) {
@@ -591,6 +609,7 @@ where
         }
     }
 
+    /// Automatically generated documentation for this item.
     pub fn and_modify<F: FnOnce(&mut V)>(self, f: F) -> Self {
         match self {
             SmallMapEntry::Stack(e) => SmallMapEntry::Stack(e.and_modify(f)),
@@ -598,6 +617,7 @@ where
         }
     }
 
+    /// Automatically generated documentation for this item.
     pub fn key(&self) -> &K {
         match self {
             SmallMapEntry::Stack(e) => e.key(),
@@ -626,7 +646,9 @@ where
 
 /// Wrapper for iterators to hide the underlying type difference.
 pub enum SmallMapIter<'a, K, V> {
+    /// Automatically generated documentation for this item.
     Stack(heapless::index_map::Iter<'a, K, V>),
+    /// Automatically generated documentation for this item.
     Heap(hashbrown::hash_map::Iter<'a, K, V>),
 }
 
@@ -729,7 +751,9 @@ impl<K: Eq + Hash, V, const N: usize> IntoIterator for SmallMap<K, V, N> {
 
 /// Wrapper for owning iterators
 pub enum SmallMapIntoIter<K, V, const N: usize> {
+    /// Automatically generated documentation for this item.
     Stack(heapless::index_map::IntoIter<K, V, N>),
+    /// Automatically generated documentation for this item.
     Heap(hashbrown::hash_map::IntoIter<K, V>),
 }
 

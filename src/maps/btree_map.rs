@@ -196,10 +196,17 @@ impl<K, V, const N: usize> SmallBTreeMap<K, V, N>
 where
     K: Ord,
 {
+    /// A constant parameter.
     pub const MAX_STACK_SIZE: usize = 16 * 1024;
 
     /// Creates a new empty map on the stack.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= Self::MAX_STACK_SIZE,
+                "SmallBTreeMap is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         Self {
             on_stack: true,
             len: 0,
@@ -357,6 +364,7 @@ where
         }
     }
 
+    /// Returns an iterator over the elements.
     pub fn iter(&self) -> Iter<'_, K, V> {
         unsafe {
             if self.on_stack {
@@ -368,8 +376,11 @@ where
     }
 }
 
+/// Types of `Iter`.
 pub enum Iter<'a, K: Ord, V> {
+    /// Automatically generated documentation for this item.
     Stack(core::slice::Iter<'a, Entry<K, V>>),
+    /// Automatically generated documentation for this item.
     Heap(std::collections::btree_map::Iter<'a, K, V>),
 }
 
@@ -386,6 +397,7 @@ impl<'a, K: Ord, V> Iterator for Iter<'a, K, V> {
 /// Convenience alias used by `SmallBTreeSet`.
 pub type IntoIter<K, V, const N: usize> = SmallBTreeMapIntoIter<K, V, N>;
 
+/// A structure representing `HeaplessBTreeMapIntoIter`.
 pub struct HeaplessBTreeMapIntoIter<K, V, const N: usize> {
     inner: heapless::vec::IntoIter<Entry<K, V>, N, usize>,
 }
@@ -397,8 +409,11 @@ impl<K: Ord, V, const N: usize> Iterator for HeaplessBTreeMapIntoIter<K, V, N> {
     }
 }
 
+/// Types of `SmallBTreeMapIntoIter`.
 pub enum SmallBTreeMapIntoIter<K, V, const N: usize> {
+    /// Automatically generated documentation for this item.
     Stack(HeaplessBTreeMapIntoIter<K, V, N>),
+    /// Automatically generated documentation for this item.
     Heap(std::collections::btree_map::IntoIter<K, V>),
 }
 

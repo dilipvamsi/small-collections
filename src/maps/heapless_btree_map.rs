@@ -109,6 +109,12 @@ pub struct HeaplessBTreeMap<K, V, const N: usize> {
 impl<K: Ord, V, const N: usize> HeaplessBTreeMap<K, V, N> {
     /// Creates an empty map.  No allocation occurs.
     pub fn new() -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<Self>() <= 16 * 1024,
+                "HeaplessBTreeMap is too large! The struct size exceeds the 16KB limit. Reduce N."
+            );
+        }
         Self {
             buf: HeaplessVec::new(),
         }
