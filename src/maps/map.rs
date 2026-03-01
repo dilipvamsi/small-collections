@@ -680,6 +680,27 @@ impl<K: Debug + Eq + Hash, V: Debug, const N: usize> Debug for SmallMap<K, V, N>
     }
 }
 
+impl<K, V, const N: usize, M> PartialEq<M> for SmallMap<K, V, N>
+where
+    K: Eq + Hash,
+    V: PartialEq,
+    M: AnyMap<K, V>,
+{
+    fn eq(&self, other: &M) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().all(|(k, v)| other.get(k) == Some(v))
+    }
+}
+
+impl<K, V, const N: usize> Eq for SmallMap<K, V, N>
+where
+    K: Eq + Hash,
+    V: Eq,
+{
+}
+
 // FromIterator (Allows .collect())
 impl<K, V, const N: usize> FromIterator<(K, V)> for SmallMap<K, V, N>
 where
@@ -1034,5 +1055,19 @@ mod tests {
         let mut map4: SmallMap<i32, i32, 2> = vec![(1, 1), (2, 2), (3, 3)].into_iter().collect();
         let entry_h = map4.entry(5);
         assert_eq!(entry_h.key(), &5);
+    }
+
+    #[test]
+    fn test_map_traits_equality_interop() {
+        let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+
+        // Compare with std::collections::HashMap
+        let mut std_map = std::collections::HashMap::new();
+        std_map.insert(1, 10);
+        std_map.insert(2, 20);
+
+        assert_eq!(map, std_map);
     }
 }

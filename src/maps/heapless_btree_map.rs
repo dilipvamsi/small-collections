@@ -239,6 +239,35 @@ impl<K: Ord, V, const N: usize> IntoIterator for HeaplessBTreeMap<K, V, N> {
     }
 }
 
+impl<K: Ord, V: PartialEq, const N: usize> PartialEq for HeaplessBTreeMap<K, V, N> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter()
+            .zip(other.iter())
+            .all(|(a, b)| a.0 == b.0 && a.1 == b.1)
+    }
+}
+
+impl<K: Ord, V: Eq, const N: usize> Eq for HeaplessBTreeMap<K, V, N> {}
+
+impl<K: Ord, V: PartialOrd, const N: usize> PartialOrd for HeaplessBTreeMap<K, V, N> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter()
+            .map(|e| (&e.0, &e.1))
+            .partial_cmp(other.iter().map(|e| (&e.0, &e.1)))
+    }
+}
+
+impl<K: Ord, V: Ord, const N: usize> Ord for HeaplessBTreeMap<K, V, N> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter()
+            .map(|e| (&e.0, &e.1))
+            .cmp(other.iter().map(|e| (&e.0, &e.1)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

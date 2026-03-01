@@ -3,8 +3,8 @@
 //! [`SmallBTreeSet`] is a thin wrapper around `SmallBTreeMap<T, (), N>`,
 //! inheriting all the sorted-order guarantees and the stack→heap spill protocol.
 
-use crate::SmallBTreeMap;
 use crate::AnySet;
+use crate::SmallBTreeMap;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::iter::FromIterator;
@@ -198,16 +198,40 @@ where
     }
 }
 
-impl<T, const N: usize> PartialEq for SmallBTreeSet<T, N>
+use std::cmp::Ordering;
+
+impl<T, const N: usize, S> PartialEq<S> for SmallBTreeSet<T, N>
 where
-    T: Ord + PartialEq,
+    T: Ord,
+    S: AnySet<T>,
 {
-    fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.iter().zip(other.iter()).all(|(a, b)| a == b)
+    fn eq(&self, other: &S) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().all(|v| other.contains(v))
     }
 }
 
 impl<T, const N: usize> Eq for SmallBTreeSet<T, N> where T: Ord + Eq {}
+
+impl<T, const N: usize> PartialOrd for SmallBTreeSet<T, N>
+where
+    T: Ord,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other.iter())
+    }
+}
+
+impl<T, const N: usize> Ord for SmallBTreeSet<T, N>
+where
+    T: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -336,5 +360,24 @@ mod tests {
     fn test_btree_set_any_storage_with_capacity() {
         let s_cap = SmallBTreeSet::<i32, 2>::with_capacity(10);
         assert!(!s_cap.is_on_stack());
+    }
+
+    #[test]
+    fn test_btree_set_traits_comparison() {
+        let set1: SmallBTreeSet<i32, 2> = vec![1, 2].into_iter().collect();
+        let set2: SmallBTreeSet<i32, 2> = vec![1, 2].into_iter().collect();
+        let set3: SmallBTreeSet<i32, 2> = vec![1, 3].into_iter().collect();
+
+        // PartialEq (generic)
+        assert_eq!(set1, set2);
+        assert_ne!(set1, set3);
+
+        // PartialOrd / Ord
+        assert!(set1 < set3);
+        assert!(set3 > set1);
+
+        // Interop with std::collections::BTreeSet
+        let std_set: std::collections::BTreeSet<i32> = vec![1, 2].into_iter().collect();
+        assert_eq!(set1, std_set);
     }
 }

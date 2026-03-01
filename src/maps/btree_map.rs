@@ -7,6 +7,7 @@
 //! [`AnyBTreeMap`] is an object-safe trait that unifies both storage backends.
 
 use core::borrow::Borrow;
+use core::cmp::Ordering;
 use core::mem::ManuallyDrop;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
@@ -52,6 +53,39 @@ impl<K: Ord, V> AnyBTreeMap<K, V> for BTreeMap<K, V> {
     }
     fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.insert(key, value)
+    }
+    fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(key)
+    }
+    fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get_mut(key)
+    }
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.remove(key)
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+}
+
+impl<K: Ord, V, const N: usize> AnyBTreeMap<K, V> for HeaplessBTreeMap<K, V, N> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert(key, value).ok().flatten()
     }
     fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -434,6 +468,31 @@ where
     }
 }
 
+impl<K: PartialEq + Ord, V: PartialEq, const N: usize, M: AnyBTreeMap<K, V>> PartialEq<M>
+    for SmallBTreeMap<K, V, N>
+{
+    fn eq(&self, other: &M) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().all(|(k, v)| other.get(k) == Some(v))
+    }
+}
+
+impl<K: Eq + Ord, V: Eq, const N: usize> Eq for SmallBTreeMap<K, V, N> {}
+
+impl<K: PartialOrd + Ord, V: PartialOrd, const N: usize> PartialOrd for SmallBTreeMap<K, V, N> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other.iter())
+    }
+}
+
+impl<K: Ord, V: Ord, const N: usize> Ord for SmallBTreeMap<K, V, N> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
 impl<K: Ord, V, const N: usize> Default for SmallBTreeMap<K, V, N> {
     fn default() -> Self {
         Self::new()
@@ -691,5 +750,50 @@ mod tests {
         s.insert(2, 2);
         s.insert(1, 1);
         assert_eq!(s.get(&1), Some(&1));
+    }
+
+    #[test]
+    fn test_btree_map_traits_comparison() {
+        let map1: SmallBTreeMap<i32, i32, 2> = vec![(1, 10), (2, 20)].into_iter().collect();
+        let map2: SmallBTreeMap<i32, i32, 2> = vec![(1, 10), (2, 20)].into_iter().collect();
+        let map3: SmallBTreeMap<i32, i32, 2> = vec![(1, 10), (3, 30)].into_iter().collect();
+
+        // PartialEq
+        assert_eq!(map1, map2);
+        assert_ne!(map1, map3);
+
+        // PartialOrd / Ord
+        assert!(map1 < map3);
+        assert!(map3 > map1);
+
+        // Spill vs Stack Comparison
+        let mut map4: SmallBTreeMap<i32, i32, 2> = vec![(1, 10), (2, 20)].into_iter().collect();
+        map4.insert(3, 30); // Spill
+        assert_ne!(map1, map4);
+        assert!(map1 < map4);
+    }
+
+    #[test]
+    fn test_btree_map_traits_interop() {
+        let mut map: SmallBTreeMap<i32, i32, 2> = SmallBTreeMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+
+        let mut std_map = std::collections::BTreeMap::new();
+        std_map.insert(1, 10);
+        std_map.insert(2, 20);
+
+        assert_eq!(map, std_map);
+    }
+
+    #[test]
+    fn test_btree_map_traits_any_btreemap_interop() {
+        fn check_any<M: AnyBTreeMap<i32, i32>>(map: &M) {
+            assert_eq!(map.len(), 2);
+            assert_eq!(map.get(&1), Some(&10));
+        }
+
+        let map: SmallBTreeMap<i32, i32, 2> = vec![(1, 10), (2, 20)].into_iter().collect();
+        check_any(&map);
     }
 }

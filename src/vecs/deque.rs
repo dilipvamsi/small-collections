@@ -684,6 +684,26 @@ impl<T: PartialEq, const N: usize> PartialEq for SmallDeque<T, N> {
 }
 impl<T: Eq, const N: usize> Eq for SmallDeque<T, N> {}
 
+impl<T: PartialOrd, const N: usize> PartialOrd for SmallDeque<T, N> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let (s1_a, s2_a) = self.as_slices();
+        let (s1_b, s2_b) = other.as_slices();
+        s1_a.iter()
+            .chain(s2_a.iter())
+            .partial_cmp(s1_b.iter().chain(s2_b.iter()))
+    }
+}
+
+impl<T: Ord, const N: usize> Ord for SmallDeque<T, N> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let (s1_a, s2_a) = self.as_slices();
+        let (s1_b, s2_b) = other.as_slices();
+        s1_a.iter()
+            .chain(s2_a.iter())
+            .cmp(s1_b.iter().chain(s2_b.iter()))
+    }
+}
+
 impl<T, const N: usize> Extend<T> for SmallDeque<T, N> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         for i in iter {
@@ -821,6 +841,19 @@ mod tests {
         let (s1, s2) = d.as_slices();
         assert_eq!(s1, &[1, 2]);
         assert!(s2.is_empty());
+    }
+
+    #[test]
+    fn test_deque_traits_comparison() {
+        let d1: SmallDeque<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        let d2: SmallDeque<i32, 4> = vec![1, 2, 3].into_iter().collect();
+        let d3: SmallDeque<i32, 4> = vec![1, 2, 4].into_iter().collect();
+        let d4: SmallDeque<i32, 4> = vec![1, 2].into_iter().collect();
+
+        assert_eq!(d1, d2);
+        assert!(d1 < d3);
+        assert!(d1 > d4);
+        assert!(d3 > d1);
     }
 
     // ─── iter ────────────────────────────────────────────────────────────────

@@ -182,6 +182,26 @@ impl<K: Eq + Hash, V, const N: usize> HeaplessOrderedMap<K, V, N> {
     }
 }
 
+impl<K, V, const N: usize> PartialEq for HeaplessOrderedMap<K, V, N>
+where
+    K: Eq + Hash,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().all(|(k, v)| other.get(k) == Some(v))
+    }
+}
+
+impl<K, V, const N: usize> Eq for HeaplessOrderedMap<K, V, N>
+where
+    K: Eq + Hash,
+    V: Eq,
+{
+}
+
 impl<K: Eq + Hash, V, const N: usize> Default for HeaplessOrderedMap<K, V, N> {
     /// Creates an empty map.  Equivalent to [`HeaplessOrderedMap::new`].
     fn default() -> Self {

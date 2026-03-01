@@ -63,6 +63,46 @@ impl<K: Eq + Hash, V, S: std::hash::BuildHasher> AnyMap<K, V> for OrderMap<K, V,
     }
 }
 
+impl<K: Eq + Hash, V, const N: usize> AnyMap<K, V> for HeaplessOrderedMap<K, V, N> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert(key, value).ok().flatten()
+    }
+    fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get(key)
+    }
+    fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_mut(key)
+    }
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.remove(key)
+    }
+    fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.contains_key(key)
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+}
+
 /// An insertion-order-preserving map that lives on the stack for up to `N` entries,
 /// then spills to a heap-allocated `ordermap::OrderMap`.
 ///
@@ -367,6 +407,27 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
+}
+
+impl<K, V, const N: usize, M> PartialEq<M> for SmallOrderedMap<K, V, N>
+where
+    K: Eq + Hash,
+    V: PartialEq,
+    M: AnyMap<K, V>,
+{
+    fn eq(&self, other: &M) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().all(|(k, v)| other.get(k) == Some(v))
+    }
+}
+
+impl<K, V, const N: usize> Eq for SmallOrderedMap<K, V, N>
+where
+    K: Eq + Hash,
+    V: Eq,
+{
 }
 
 impl<K, V, const N: usize> SmallOrderedMap<K, V, N>
