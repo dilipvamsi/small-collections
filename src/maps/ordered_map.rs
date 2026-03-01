@@ -671,3 +671,55 @@ mod tests {
         assert_eq!(it.next(), Some((1, 1)));
     }
 }
+
+#[cfg(test)]
+mod ordered_map_coverage_tests {
+    use super::*;
+
+    fn run_any_map_test<M: AnyMap<i32, i32>>(any_map: &mut M) {
+        assert_eq!(any_map.len(), 0);
+        any_map.insert(1, 10);
+        assert_eq!(any_map.get(&1), Some(&10));
+        assert_eq!(any_map.get_mut(&1), Some(&mut 10));
+        assert!(any_map.contains_key(&1));
+        assert_eq!(any_map.remove(&1), Some(10));
+        any_map.insert(2, 20);
+        any_map.clear();
+        assert_eq!(any_map.len(), 0);
+    }
+
+    #[test]
+    fn test_any_map_trait_impls() {
+        let mut ord_map: OrderMap<i32, i32> = OrderMap::new();
+        run_any_map_test(&mut ord_map);
+
+        let mut hl_map: HeaplessOrderedMap<i32, i32, 2> = HeaplessOrderedMap::new();
+        run_any_map_test(&mut hl_map);
+
+        let mut small_map: SmallOrderedMap<i32, i32, 2> = SmallOrderedMap::new();
+        run_any_map_test(&mut small_map);
+    }
+
+    #[test]
+    fn test_small_ordered_map_insert_heap_branch() {
+        let mut map: SmallOrderedMap<i32, i32, 2> = SmallOrderedMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+        map.insert(3, 30); // spill
+
+        let old = map.insert(3, 300); // heap insert branch
+        assert_eq!(old, Some(30));
+    }
+
+    #[test]
+    fn test_small_ordered_map_partial_eq_length() {
+        let mut m1: SmallOrderedMap<i32, i32, 2> = SmallOrderedMap::new();
+        m1.insert(1, 10);
+
+        let mut m2: SmallOrderedMap<i32, i32, 2> = SmallOrderedMap::new();
+        m2.insert(1, 10);
+        m2.insert(2, 20);
+
+        assert_ne!(m1, m2);
+    }
+}

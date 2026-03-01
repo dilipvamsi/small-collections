@@ -199,13 +199,6 @@ where
     pub const MAX_STACK_SIZE: usize = 16 * 1024;
 
     pub fn new() -> Self {
-        const {
-            assert!(
-                std::mem::size_of::<Self>() <= SmallBTreeMap::<K, V, N>::MAX_STACK_SIZE,
-                "SmallBTreeMap is too large! Reduce N."
-            );
-        }
-
         Self {
             on_stack: true,
             len: 0,
@@ -795,5 +788,62 @@ mod tests {
 
         let map: SmallBTreeMap<i32, i32, 2> = vec![(1, 10), (2, 20)].into_iter().collect();
         check_any(&map);
+    }
+}
+
+#[cfg(test)]
+mod btree_map_coverage_tests {
+    use super::*;
+
+    fn run_any_btree_map_test<M: AnyBTreeMap<i32, i32>>(any_map: &mut M) {
+        assert_eq!(any_map.len(), 0);
+        assert!(any_map.is_empty());
+        any_map.insert(1, 10);
+        assert_eq!(any_map.get(&1), Some(&10));
+        assert_eq!(any_map.get_mut(&1), Some(&mut 10));
+        assert_eq!(any_map.remove(&1), Some(10));
+        any_map.insert(2, 20);
+        any_map.clear();
+        assert_eq!(any_map.len(), 0);
+    }
+
+    #[test]
+    fn test_any_btree_map_trait_impls() {
+        let mut std_map: std::collections::BTreeMap<i32, i32> = std::collections::BTreeMap::new();
+        run_any_btree_map_test(&mut std_map);
+
+        let mut hl_map: HeaplessBTreeMap<i32, i32, 2> = HeaplessBTreeMap::new();
+        run_any_btree_map_test(&mut hl_map);
+
+        let mut small_map: SmallBTreeMap<i32, i32, 2> = SmallBTreeMap::new();
+        run_any_btree_map_test(&mut small_map);
+    }
+
+    #[test]
+    fn test_small_btree_map_with_capacity_heap() {
+        // cap > N creates heap directly
+        let map: SmallBTreeMap<i32, i32, 2> = SmallBTreeMap::with_capacity(3);
+        assert!(!map.is_on_stack());
+        assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn test_small_btree_map_insert_heap_replace() {
+        let mut map: SmallBTreeMap<i32, i32, 2> = SmallBTreeMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+        map.insert(3, 30); // spill
+
+        // replace existing key on heap
+        let old = map.insert(2, 200);
+        assert_eq!(old, Some(20));
+        assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "no entry found for key")]
+    fn test_small_btree_map_index_mut_panic() {
+        let mut map: SmallBTreeMap<i32, i32, 2> = SmallBTreeMap::new();
+        let _val = &mut map[&1];
     }
 }

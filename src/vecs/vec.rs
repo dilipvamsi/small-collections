@@ -747,7 +747,7 @@ impl<T, const N: usize> SmallVec<T, N> {
 }
 
 #[cfg(test)]
-mod tests {
+mod vec_basic_tests {
     use super::*;
 
     #[test]
@@ -970,5 +970,114 @@ mod tests {
         assert_eq!(v[0], 10);
         v.as_mut_slice()[1] = 20;
         assert_eq!(v[1], 20);
+    }
+}
+
+#[cfg(test)]
+mod vec_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_any_vec_trait_std_and_slice_implementations() {
+        let v_std = vec![1, 2, 3];
+        assert_eq!(AnyVec::len(&v_std), 3);
+        assert!(!AnyVec::is_empty(&v_std));
+        assert_eq!(AnyVec::get(&v_std, 1), Some(&2));
+        assert!(v_std.contains(&2));
+
+        let arr = [1, 2, 3];
+        assert_eq!(AnyVec::len(&arr), 3);
+
+        let slice: &[i32] = &[1, 2];
+        assert_eq!(AnyVec::len(slice), 2);
+    }
+
+    #[test]
+    fn test_small_vec_empty_and_oob_access() {
+        let mut v: SmallVec<i32, 2> = SmallVec::new();
+        assert_eq!(v.get(0), None);
+        assert_eq!(v.get_mut(0), None);
+        assert_eq!(v.pop(), None);
+
+        v.push(1);
+        v.push(2);
+        v.push(3); // heap
+        assert_eq!(v.get(3), None);
+        assert_eq!(v.get_mut(3), None);
+    }
+
+    #[test]
+    fn test_small_vec_heap_insertion_removal_and_swap() {
+        let mut v: SmallVec<i32, 2> = SmallVec::new();
+        v.extend([1, 2, 3]); // heap
+
+        v.insert(1, 10);
+        assert_eq!(v.as_slice(), &[1, 10, 2, 3]);
+
+        assert_eq!(v.remove(1), 10);
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
+
+        assert_eq!(v.swap_remove(0), 1);
+        assert_eq!(v.as_slice(), &[3, 2]);
+    }
+
+    #[test]
+    fn test_small_vec_conversion_to_std_vec() {
+        let v: SmallVec<i32, 4> = SmallVec::from_iter([1, 2]);
+        let v_std = v.into_vec();
+        assert_eq!(v_std, vec![1, 2]);
+
+        let v2: SmallVec<i32, 2> = SmallVec::from_iter([1, 2, 3]);
+        let v2_std = v2.into_vec();
+        assert_eq!(v2_std, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_small_vec_resizing_and_truncation() {
+        let mut v: SmallVec<i32, 4> = SmallVec::from_iter([1, 2, 3, 4]);
+        v.resize(2, 0);
+        assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn test_small_vec_hashing_comparison_and_range_indexing() {
+        let mut v: SmallVec<i32, 4> = SmallVec::from_iter([1, 2, 3]);
+        let mut v2 = v.clone();
+        assert_eq!(v, v2);
+
+        v2.push(4);
+        assert!(v < v2);
+        assert_eq!(v.cmp(&v2), Ordering::Less);
+
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        v.hash(&mut h);
+
+        // Range indexing
+        assert_eq!(&v[..], &[1, 2, 3]);
+        v[..].as_mut(); // hits IndexMut<RangeFull>
+    }
+
+    #[test]
+    fn test_small_vec_any_vec_subsequence_and_prefix_checks() {
+        let v: SmallVec<i32, 4> = SmallVec::from_iter([1, 2, 3, 4]);
+        let other: SmallVec<i32, 4> = SmallVec::from_iter([1, 2]);
+
+        assert!(v.eq_any(&v));
+        assert_eq!(v.cmp_any(&other), Ordering::Greater);
+        assert!(v.starts_with_any(&other));
+        assert!(v.ends_with_any(&SmallVec::<i32, 4>::from_iter([3, 4])));
+        assert!(v.contains_subsequence(&SmallVec::<i32, 4>::from_iter([2, 3])));
+        assert!(!v.contains_subsequence(&SmallVec::<i32, 4>::from_iter([5])));
+        assert!(v.contains_subsequence(&[])); // empty subscence is always true
+        assert!(!SmallVec::<i32, 4>::from_iter([1]).contains_subsequence(&[1, 2]));
+    }
+
+    #[test]
+    fn test_small_vec_heap_into_iterator_size_hint() {
+        let v: SmallVec<i32, 2> = SmallVec::from_iter([1, 2, 3]);
+        let it = v.into_iter();
+        assert_eq!(it.size_hint().0, 3);
+        let collected: Vec<_> = it.collect();
+        assert_eq!(collected, vec![1, 2, 3]);
     }
 }

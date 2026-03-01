@@ -981,3 +981,130 @@ mod tests {
         assert_eq!(h.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod heap_coverage_tests {
+    use super::*;
+    use std::collections::BinaryHeap;
+
+    #[test]
+    fn test_any_heap_binary_heap_impl() {
+        let mut std_heap: BinaryHeap<i32> = BinaryHeap::new();
+        let any: &mut dyn AnyHeap<i32> = &mut std_heap;
+
+        assert!(any.is_empty());
+        assert_eq!(any.len(), 0);
+
+        any.push(10);
+        any.push(20);
+
+        assert_eq!(any.len(), 2);
+        assert!(!any.is_empty());
+        assert_eq!(any.peek(), Some(&20));
+        assert_eq!(any.pop(), Some(20));
+
+        any.clear();
+        assert!(any.is_empty());
+    }
+
+    #[test]
+    fn test_any_heap_small_binary_heap_impl() {
+        let mut small_heap: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::new();
+        let any: &mut dyn AnyHeap<i32> = &mut small_heap;
+
+        assert!(any.is_empty());
+        assert_eq!(any.len(), 0);
+
+        any.push(10);
+        any.push(20);
+
+        assert_eq!(any.len(), 2);
+        assert_eq!(any.peek(), Some(&20));
+        assert_eq!(any.pop(), Some(20));
+
+        any.clear();
+        assert!(any.is_empty());
+    }
+
+    #[test]
+    fn test_heap_kind_explicit_calls() {
+        // Max
+        assert_eq!(<Max as HeapKind<i32>>::wrap(5), 5);
+        assert_eq!(<Max as HeapKind<i32>>::unwrap(5), 5);
+        let val = 5;
+        assert_eq!(<Max as HeapKind<i32>>::wrap_ref(&val), &5);
+        assert_eq!(<Max as HeapKind<i32>>::unwrap_ref(&val), &5);
+
+        // Min
+        assert_eq!(<Min as HeapKind<i32>>::wrap(5), Reverse(5));
+        assert_eq!(<Min as HeapKind<i32>>::unwrap(Reverse(5)), 5);
+        let rev = Reverse(5);
+        assert_eq!(<Min as HeapKind<i32>>::unwrap_ref(&rev), &5);
+    }
+
+    #[test]
+    fn test_append_early_return() {
+        let mut h1: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::new();
+        let mut h2: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::new();
+
+        h1.push(1);
+        // append empty
+        h1.append(&mut h2);
+        assert_eq!(h1.len(), 1);
+    }
+
+    #[test]
+    fn test_append_heap_to_heap() {
+        let mut h1: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::with_capacity(5);
+        h1.push(1);
+        h1.push(2);
+
+        let mut h2: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::with_capacity(5);
+        h2.push(3);
+        h2.push(4);
+
+        h1.append(&mut h2);
+        assert_eq!(h1.len(), 4);
+        assert!(h2.is_empty());
+        assert_eq!(h1.pop(), Some(4));
+    }
+
+    #[test]
+    fn test_append_stack_to_heap() {
+        let mut h1: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::with_capacity(5);
+        h1.push(1);
+
+        let mut h2: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::new();
+        h2.push(3);
+
+        h1.append(&mut h2);
+        assert_eq!(h1.len(), 2);
+        assert_eq!(h1.pop(), Some(3));
+    }
+
+    #[test]
+    fn test_into_vec_heap() {
+        let mut heap: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::with_capacity(5);
+        heap.push(1);
+        heap.push(2);
+        heap.push(3);
+
+        let vec = heap.into_vec();
+        assert_eq!(vec.len(), 3);
+        assert!(vec.contains(&1));
+        assert!(vec.contains(&2));
+        assert!(vec.contains(&3));
+    }
+
+    #[test]
+    fn test_into_iter_ref() {
+        let mut heap: SmallBinaryHeap<i32, 2> = SmallBinaryHeap::new();
+        heap.push(1);
+        heap.push(2);
+
+        let mut iter = (&heap).into_iter();
+        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(iter.next(), None);
+    }
+}

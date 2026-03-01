@@ -340,3 +340,73 @@ mod tests {
         assert_eq!(e1.partial_cmp(&e3), Some(Ordering::Less));
     }
 }
+
+#[cfg(test)]
+mod heapless_btree_map_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_empty_false() {
+        let mut map: HeaplessBTreeMap<i32, i32, 2> = HeaplessBTreeMap::new();
+        map.insert(1, 10).unwrap();
+        assert!(!map.is_empty());
+    }
+
+    #[test]
+    fn test_get_mut_missing() {
+        let mut map: HeaplessBTreeMap<i32, i32, 2> = HeaplessBTreeMap::new();
+        map.insert(1, 10).unwrap();
+        assert_eq!(map.get_mut(&2), None);
+    }
+
+    #[test]
+    fn test_into_vec() {
+        let mut map: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        map.insert(2, 20).unwrap();
+        map.insert(1, 10).unwrap();
+
+        // Stored in sorted order: (1, 10), (2, 20)
+        let vec = map.into_vec();
+        assert_eq!(vec.len(), 2);
+        assert_eq!(vec[0].0, 1);
+        assert_eq!(vec[1].0, 2);
+    }
+
+    #[test]
+    fn test_traits_partial_eq() {
+        let mut m1: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        m1.insert(1, 10).unwrap();
+
+        let mut m2: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        m2.insert(1, 10).unwrap();
+
+        let mut m3: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        m3.insert(1, 10).unwrap();
+        m3.insert(2, 20).unwrap();
+
+        let mut m4: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        m4.insert(1, 99).unwrap(); // Same key, diff val
+
+        assert_eq!(m1, m2);
+        assert_ne!(m1, m3); // len differing
+        assert_ne!(m1, m4); // vals differing
+    }
+
+    #[test]
+    fn test_traits_ord_partial_ord() {
+        let mut m1: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        m1.insert(1, 10).unwrap();
+        m1.insert(2, 20).unwrap();
+
+        let mut m2: HeaplessBTreeMap<i32, i32, 4> = HeaplessBTreeMap::new();
+        m2.insert(1, 10).unwrap();
+        m2.insert(3, 30).unwrap();
+
+        assert!(m1 < m2);
+        assert_eq!(m1.cmp(&m2), Ordering::Less);
+        assert_eq!(m1.partial_cmp(&m2), Some(Ordering::Less));
+
+        // Identity
+        assert_eq!(m1.cmp(&m1), Ordering::Equal);
+    }
+}

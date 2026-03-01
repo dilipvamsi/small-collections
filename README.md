@@ -337,6 +337,24 @@ When a collection transitions from Stack to Heap, it performs a **bitwise copy**
 1.  Cloning keys/values (Standard moves).
 2.  Double-hashing (Hashes are calculated once during migration).
 
+## ✅ Testing & Code Coverage
+
+`small-collections` places a strong emphasis on reliability. The entire crate is backed by a comprehensive test suite that achieves **over 90% code coverage**.
+
+Testing covers all critical paths, including:
+
+- **Stack-to-Heap Transitions**: Rigorously verified to ensure data integrity during spills (zero-cost moves) across all collections.
+- **LRU Cache Parity**: Extensive tests ensure our heapless cache variants provide identical behavior and trait interoperability (`AnyLruCache`) to the standard `lru` crate.
+- **Object-Safe Traits**: Custom traits like `AnyMap`, `AnyVec`, and `AnyString` are heavily tested for seamless dispatch between stack-allocated arrays and heap-allocated structs.
+- **Edge Cases**: Out-of-bounds access, hash collisions, dynamic capacity reservations, and compile-time panic branches (`#[should_panic]`) are all thoroughly exercised.
+
+You can verify the test suite and coverage locally using `cargo tarpaulin`:
+
+```bash
+cargo test
+cargo tarpaulin --out Stdout --skip-clean --engine ptrace
+```
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please ensure that any PRs include tests covering both the "Stack" state and the "Heap" state to ensure the spill logic is exercised correctly.

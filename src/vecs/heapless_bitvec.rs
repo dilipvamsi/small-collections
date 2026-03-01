@@ -206,7 +206,7 @@ impl<const N: usize, O: BitOrder> AnyBitVec for HeaplessBitVec<N, O> {
 }
 
 #[cfg(test)]
-mod tests {
+mod heapless_bitvec_basic_tests {
     use super::*;
     use bitvec::prelude::{Lsb0, Msb0};
 
@@ -311,5 +311,34 @@ mod tests {
         let any: &dyn AnyBitVec = &bv;
         assert_eq!(any.len(), 1);
         assert_eq!(any.get(0), Some(true));
+    }
+}
+
+#[cfg(test)]
+mod heapless_bitvec_coverage_tests {
+    use super::*;
+    use bitvec::prelude::Lsb0;
+    use std::borrow::Borrow;
+
+    #[test]
+    #[should_panic(expected = "Index out of bounds")]
+    fn test_set_out_of_bounds() {
+        let mut bv: HeaplessBitVec<1, Lsb0> = HeaplessBitVec::new();
+        bv.set(10, true);
+    }
+
+    #[test]
+    fn test_deref_mut_and_borrow() {
+        let mut bv: HeaplessBitVec<1, Lsb0> = HeaplessBitVec::new();
+        bv.push(true).unwrap();
+
+        // DerefMut
+        use core::ops::DerefMut;
+        let slice = bv.deref_mut();
+        slice.set(0, false);
+
+        // Borrow
+        let borrowed: &bitvec::slice::BitSlice<u8, Lsb0> = bv.borrow();
+        assert_eq!(borrowed.len(), 1);
     }
 }

@@ -296,3 +296,53 @@ mod tests {
         assert_eq!(map.get_mut("Apple"), Some(&mut 100));
     }
 }
+
+#[cfg(test)]
+mod heapless_ordered_map_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_empty_false() {
+        let mut map: HeaplessOrderedMap<i32, i32, 2> = HeaplessOrderedMap::new();
+        map.insert(1, 10).unwrap();
+        assert!(!map.is_empty());
+    }
+
+    #[test]
+    fn test_get_get_mut_missing() {
+        let mut map: HeaplessOrderedMap<i32, i32, 2> = HeaplessOrderedMap::new();
+        map.insert(1, 10).unwrap();
+
+        assert_eq!(map.get(&2), None);
+        assert_eq!(map.get_mut(&2), None);
+    }
+
+    #[test]
+    fn test_into_inner() {
+        let mut map: HeaplessOrderedMap<i32, i32, 2> = HeaplessOrderedMap::new();
+        map.insert(1, 10).unwrap();
+        let inner = map.into_inner();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner.get(&1), Some(&10));
+    }
+
+    #[test]
+    fn test_partial_eq_variants() {
+        let mut m1: HeaplessOrderedMap<i32, i32, 4> = HeaplessOrderedMap::new();
+        m1.insert(1, 10).unwrap();
+
+        let mut m2: HeaplessOrderedMap<i32, i32, 4> = HeaplessOrderedMap::new();
+        m2.insert(1, 10).unwrap();
+
+        let mut m3: HeaplessOrderedMap<i32, i32, 4> = HeaplessOrderedMap::new();
+        m3.insert(1, 10).unwrap();
+        m3.insert(2, 20).unwrap();
+
+        let mut m4: HeaplessOrderedMap<i32, i32, 4> = HeaplessOrderedMap::new();
+        m4.insert(1, 99).unwrap();
+
+        assert_eq!(m1, m2);
+        assert_ne!(m1, m3); // len diff
+        assert_ne!(m1, m4); // val diff
+    }
+}

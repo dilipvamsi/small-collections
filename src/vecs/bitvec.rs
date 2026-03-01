@@ -303,7 +303,7 @@ impl<const N: usize, O: BitOrder> Default for SmallBitVec<N, O> {
 }
 
 #[cfg(test)]
-mod tests {
+mod bitvec_basic_tests {
     use super::*;
     use bitvec::prelude::{Lsb0, Msb0};
 
@@ -432,5 +432,70 @@ mod tests {
         assert_eq!(any.len(), 2);
         assert_eq!(any.get(0), Some(true));
         assert_eq!(any.get(1), Some(false));
+    }
+}
+
+#[cfg(test)]
+mod bitvec_coverage_tests {
+    use super::*;
+    use bitvec::prelude::Lsb0;
+
+    #[test]
+    fn test_any_bitvec_is_empty() {
+        struct MockAny;
+        impl AnyBitVec for MockAny {
+            fn len(&self) -> usize {
+                0
+            }
+            fn get(&self, _index: usize) -> Option<bool> {
+                None
+            }
+        }
+        let m = MockAny;
+        assert!(m.is_empty());
+
+        let mut b: BitVec<u8, Lsb0> = BitVec::new();
+        {
+            let any_b: &dyn AnyBitVec = &b;
+            assert_eq!(any_b.len(), 0);
+        }
+        b.push(true);
+        {
+            let any_b: &dyn AnyBitVec = &b;
+            assert_eq!(any_b.get(0), Some(true));
+        }
+    }
+
+    #[test]
+    fn test_small_bitvec_traits_and_heap() {
+        use core::ops::DerefMut;
+        use std::borrow::Borrow;
+
+        let mut sbv: SmallBitVec<1, Lsb0> = SmallBitVec::new();
+        sbv.push(true);
+
+        // AnyBitVec len / get
+        let any: &dyn AnyBitVec = &sbv;
+        assert_eq!(any.len(), 1);
+        assert_eq!(any.get(0), Some(true));
+
+        // Borrow
+        let borrowed: &bitvec::slice::BitSlice<u8, Lsb0> = sbv.borrow();
+        assert_eq!(borrowed.len(), 1);
+
+        // Clone stack
+        let cloned_stack = sbv.clone();
+        assert_eq!(cloned_stack.len(), 1);
+
+        // DerefMut heap
+        for _ in 0..10 {
+            sbv.push(false);
+        }
+        let mut_slice = sbv.deref_mut();
+        mut_slice.set(1, true);
+
+        // Clone heap
+        let cloned_heap = sbv.clone();
+        assert_eq!(cloned_heap.len(), 11);
     }
 }

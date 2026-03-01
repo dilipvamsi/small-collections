@@ -784,7 +784,7 @@ impl<const N: usize> SmallString<N> {
 }
 
 #[cfg(test)]
-mod tests {
+mod string_basic_tests {
 
     use super::*;
     use std::borrow::Borrow;
@@ -1368,5 +1368,121 @@ mod tests {
         let long_bytes = b"a".repeat(100);
         let s_long = SmallString::<16>::from_utf8(long_bytes).unwrap();
         assert!(!s_long.is_on_stack());
+    }
+}
+
+#[cfg(test)]
+mod string_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_any_string_trait_std_string_implementation() {
+        let mut s = String::from("abc");
+        let any: &mut dyn AnyString = &mut s;
+        assert_eq!(any.as_str(), "abc");
+        assert_eq!(any.len(), 3);
+        assert!(!any.is_empty());
+        any.push('d');
+        any.push_str("ef");
+        assert_eq!(any.as_str(), "abcdef");
+        assert_eq!(any.pop(), Some('f'));
+        any.truncate(3);
+        assert_eq!(any.as_str(), "abc");
+        any.clear();
+        assert!(any.is_empty());
+    }
+
+    #[test]
+    fn test_any_string_trait_small_string_implementation() {
+        let mut s: SmallString<4> = SmallString::new();
+        let any: &mut dyn AnyString = &mut s;
+        any.push_str("abc");
+        assert_eq!(any.len(), 3);
+        any.push('d');
+        assert_eq!(any.as_str(), "abcd");
+        any.pop();
+        any.truncate(1);
+        any.clear();
+        assert!(any.is_empty());
+    }
+
+    #[test]
+    fn test_small_string_heap_storage_utf8_validity_and_retain() {
+        let mut s: SmallString<2> = SmallString::new();
+        s.push_str("abc"); // heap
+        assert!(!s.is_on_stack());
+        assert!(s.capacity() >= 2);
+
+        // from_utf8 heap
+        let long_vec = vec![b'a'; 10];
+        let s2 = SmallString::<2>::from_utf8(long_vec).unwrap();
+        assert!(!s2.is_on_stack());
+
+        // from_utf8_lossy heap
+        let s3 = SmallString::<2>::from_utf8_lossy(&[b'a'; 10]);
+        assert!(!s3.is_on_stack());
+
+        // retain heap
+        let mut s4: SmallString<2> = SmallString::from("abcde");
+        s4.retain(|c| c != 'b');
+        assert_eq!(s4.as_str(), "acde");
+
+        // shrink_to_fit heap
+        s4.shrink_to_fit();
+    }
+
+    #[test]
+    fn test_small_string_formatting_comparison_and_extension() {
+        let mut s: SmallString<4> = SmallString::from("abc");
+
+        // Display / Debug
+        assert_eq!(format!("{}", s), "abc");
+        assert_eq!(format!("{:?}", s), "\"abc\"");
+
+        // PartialEq / PartialOrd
+        let s2 = SmallString::<8>::from("abc");
+        assert_eq!(s, s2);
+        assert_eq!(s, "abc");
+        assert_eq!("abc", s);
+        assert_eq!(s, String::from("abc"));
+
+        let s3 = SmallString::<4>::from("abd");
+        assert!(s < s3);
+        assert_eq!(s.cmp(&s3), std::cmp::Ordering::Less);
+
+        // Hash
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        s.hash(&mut h);
+
+        // Borrow / AsRef
+        let b: &str = s.borrow();
+        assert_eq!(b, "abc");
+        let b_mut: &mut str = s.borrow_mut();
+        b_mut.make_ascii_uppercase();
+        assert_eq!(s.as_str(), "ABC");
+
+        let r: &str = s.as_ref();
+        assert_eq!(r, "ABC");
+        let r_bytes: &[u8] = s.as_ref();
+        assert_eq!(r_bytes, b"ABC");
+
+        // Extend / FromIterator
+        let mut s4: SmallString<4> = SmallString::new();
+        s4.extend(['a', 'b']);
+        s4.extend(["cd", "ef"]); // heap
+        assert_eq!(s4.as_str(), "abcdef");
+
+        let s5 = SmallString::<4>::from_iter(['x', 'y']);
+        assert_eq!(s5.as_str(), "xy");
+        let s6 = SmallString::<4>::from_iter(["hi", "ho"]);
+        assert_eq!(s6.as_str(), "hiho");
+    }
+
+    #[test]
+    fn test_small_string_fmt_write_trait() {
+        use std::fmt::Write;
+        let mut s: SmallString<4> = SmallString::new();
+        write!(s, "{}", 12345).unwrap();
+        assert_eq!(s.as_str(), "12345");
     }
 }

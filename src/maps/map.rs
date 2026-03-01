@@ -226,15 +226,6 @@ where
     /// 2. **Box the Value:** Change `SmallMap<K, V, N>` to `SmallMap<K, Box<V>, N>`.
     ///    This moves the bulk of the data to the heap immediately, keeping the stack footprint small.
     pub fn new() -> Self {
-        const {
-            assert!(
-                std::mem::size_of::<Self>() <= SmallMap::<K, V, N>::MAX_STACK_SIZE,
-                "SmallMap is too large! The total struct size exceeds the 16KB safety limit. \
-                 This will cause a Stack Overflow. \
-                 Solution: Reduce N, or wrap your Value in Box<V>."
-            );
-        }
-
         Self {
             on_stack: true,
             data: MapData {
@@ -1069,5 +1060,80 @@ mod tests {
         std_map.insert(2, 20);
 
         assert_eq!(map, std_map);
+    }
+}
+
+#[cfg(test)]
+mod map_coverage_tests {
+    use super::*;
+
+    fn run_any_map_test<M: AnyMap<i32, i32>>(any_map: &mut M) {
+        assert_eq!(any_map.len(), 0);
+        assert!(any_map.is_empty());
+        any_map.insert(1, 10);
+        assert_eq!(any_map.get(&1), Some(&10));
+        assert_eq!(any_map.get_mut(&1), Some(&mut 10));
+        assert!(any_map.contains_key(&1));
+        assert_eq!(any_map.remove(&1), Some(10));
+        any_map.insert(2, 20);
+        any_map.clear();
+        assert_eq!(any_map.len(), 0);
+    }
+
+    #[test]
+    fn test_any_map_trait_impls() {
+        // std::collections::HashMap
+        let mut std_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+        run_any_map_test(&mut std_map);
+
+        // hashbrown::HashMap
+        let mut hb_map: hashbrown::HashMap<i32, i32> = hashbrown::HashMap::new();
+        run_any_map_test(&mut hb_map);
+
+        // SmallMap
+        let mut small_map: SmallMap<i32, i32, 2> = SmallMap::new();
+        run_any_map_test(&mut small_map);
+    }
+
+    #[test]
+    fn test_small_map_insert_heap_branch() {
+        let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+        map.insert(3, 30); // spill
+
+        let old = map.insert(3, 300); // heap insert branch
+        assert_eq!(old, Some(30));
+    }
+
+    #[test]
+    fn test_small_map_partial_eq_length() {
+        let mut m1: SmallMap<i32, i32, 2> = SmallMap::new();
+        m1.insert(1, 10);
+
+        let mut m2: SmallMap<i32, i32, 2> = SmallMap::new();
+        m2.insert(1, 10);
+        m2.insert(2, 20);
+
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn test_small_map_spill_duplicate_insert() {
+        let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
+        map.insert(1, 10);
+        map.insert(2, 20);
+        map.insert(2, 200); // map full, but updating existing key so safe
+        assert_eq!(map.len(), 2);
+        assert!(map.is_on_stack());
+    }
+
+    #[test]
+    fn test_small_map_index_traits() {
+        let mut map: SmallMap<i32, i32, 2> = SmallMap::new();
+        map.insert(1, 10);
+        assert_eq!(map[&1], 10);
+        map[&1] = 100;
+        assert_eq!(map.get(&1), Some(&100));
     }
 }

@@ -721,7 +721,7 @@ impl<T, const N: usize> FromIterator<T> for SmallDeque<T, N> {
 }
 
 #[cfg(test)]
-mod tests {
+mod deque_basic_tests {
     use super::*;
 
     // ─── basic stack ops ──────────────────────────────────────────────────────
@@ -949,5 +949,237 @@ mod tests {
         assert_eq!(any.pop_front(), Some(5));
         any.clear();
         assert!(any.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod deque_coverage_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn test_vec_deque_any_deque_trait_implementation() {
+        let mut d = VecDeque::new();
+        let any: &mut dyn AnyDeque<i32> = &mut d;
+        any.push_back(10);
+        any.push_front(5);
+        assert_eq!(any.len(), 2);
+        assert_eq!(any.front(), Some(&5));
+        assert_eq!(any.back(), Some(&10));
+        assert_eq!(any.front_mut(), Some(&mut 5));
+        assert_eq!(any.back_mut(), Some(&mut 10));
+        assert_eq!(any.pop_front(), Some(5));
+        assert_eq!(any.pop_back(), Some(10));
+
+        any.push_back(1);
+        any.push_back(2);
+        any.remove(0);
+        any.clear();
+        assert!(any.is_empty());
+    }
+
+    #[test]
+    fn test_small_deque_constructor_heap_spill() {
+        let d: SmallDeque<i32, 4> = SmallDeque::with_capacity(2);
+        assert!(d.is_on_stack());
+
+        let d: SmallDeque<i32, 4> = SmallDeque::with_capacity(10);
+        assert!(!d.is_on_stack());
+        assert!(d.capacity() >= 10);
+    }
+
+    #[test]
+    fn test_small_deque_mutable_indexing() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(10);
+        if let Some(v) = d.get_mut(0) {
+            *v = 20;
+        }
+        assert_eq!(d.get(0), Some(&20));
+
+        d.extend([30, 40, 50, 60]); // spills
+        if let Some(v) = d.get_mut(1) {
+            *v = 45;
+        }
+        assert_eq!(d.get(1), Some(&45));
+    }
+
+    #[test]
+    fn test_small_deque_capacity_reservation() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.reserve(10);
+        assert!(!d.is_on_stack());
+        d.reserve(20);
+        assert!(d.capacity() >= 20);
+    }
+
+    #[test]
+    fn test_small_deque_removal_logic_and_shifting() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        d.push_back(3);
+
+        // Remove from middle (short half is front)
+        assert_eq!(d.remove(1), Some(2));
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.pop_front(), Some(1));
+        assert_eq!(d.pop_front(), Some(3));
+
+        // Remove from middle (short half is back)
+        d.clear();
+        d.extend([1, 2, 3, 4]);
+        assert_eq!(d.remove(2), Some(3));
+        assert_eq!(d.len(), 3);
+
+        // Remove on heap
+        d.extend([5, 6, 7]); // spills
+        assert_eq!(d.remove(2), Some(4));
+
+        // Edge cases
+        assert_eq!(d.remove(99), None);
+        assert_eq!(d.remove(0), Some(1)); // removes 1, logical state becomes [2, 5, 6, 7]
+        assert_eq!(d.pop_front(), Some(2)); // removes 2, logical state becomes [5, 6, 7]
+        assert_eq!(d.remove(d.len() - 1), Some(7));
+    }
+
+    #[test]
+    fn test_small_deque_front_back_mut_access() {
+        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
+        d.push_back(10);
+        *d.front_mut().unwrap() = 11;
+        *d.back_mut().unwrap() = 12;
+        assert_eq!(d.front(), Some(&12));
+
+        d.push_back(20);
+        d.push_back(30); // spills
+        *d.front_mut().unwrap() = 13;
+        *d.back_mut().unwrap() = 31;
+        assert_eq!(d.front(), Some(&13));
+        assert_eq!(d.back(), Some(&31));
+    }
+
+    #[test]
+    fn test_small_deque_mutable_slices_wrapped_and_heap() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        {
+            let (s1, _s2) = d.as_mut_slices();
+            s1[0] = 10;
+        }
+        assert_eq!(d.front(), Some(&10));
+
+        // Wrapped
+        d.pop_front();
+        d.pop_front();
+        d.push_back(3);
+        d.push_back(4);
+        d.push_back(5);
+        d.push_back(6);
+        // logical: [3,4,5,6], head at some wrapped index
+        {
+            let (s1, s2) = d.as_mut_slices();
+            assert!(!s1.is_empty());
+            assert!(!s2.is_empty());
+        }
+
+        // Heap
+        d.push_back(7); // spills
+        {
+            let (s1, _s2) = d.as_mut_slices();
+            assert!(!s1.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_small_deque_heap_storage_clone_and_from_iter() {
+        let mut d: SmallDeque<i32, 2> = SmallDeque::new();
+        d.extend([1, 2, 3]); // heap
+        let cloned = d.clone();
+        assert_eq!(cloned, d);
+
+        let d2 = SmallDeque::<i32, 2>::from_iter([1, 2, 3]);
+        assert_eq!(d2.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod deque_final_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_small_deque_truncation_iteration_and_ord_traits() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+
+        // wrap_sub path
+        d.push_front(1);
+
+        // AnyDeque delegators explicitly
+        let any: &mut dyn AnyDeque<i32> = &mut d;
+        any.push_back(2);
+        any.push_front(0);
+        assert_eq!(any.pop_back(), Some(2));
+        assert_eq!(any.pop_front(), Some(0));
+        any.push_back(10);
+        assert_eq!(any.remove(0), Some(1));
+        assert_eq!(any.remove(0), Some(10));
+
+        // remove shift head logic (index < len/2)
+        d.clear();
+        d.extend([1, 2, 3, 4]); // [1, 2, 3, 4]
+        assert_eq!(d.remove(1), Some(2)); // index 1 < 3/2=1.5
+
+        // truncate on heap
+        d.extend([5, 6, 7, 8]); // spills
+        d.truncate(2);
+        assert_eq!(d.len(), 2);
+        d.clear();
+        assert!(d.is_empty());
+
+        // Ord / PartialOrd
+        let d1: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 2]);
+        let d2: SmallDeque<i32, 4> = SmallDeque::from_iter([1, 3]);
+        assert!(d1 < d2);
+        assert_eq!(d1.cmp(&d2), std::cmp::Ordering::Less);
+
+        // as_slices / front on heap
+        d.extend([10, 20, 30, 40, 50]);
+        let (s1, _s2) = d.as_slices();
+        assert!(!s1.is_empty());
+        assert_eq!(d.front(), Some(&10));
+    }
+}
+
+#[cfg(test)]
+mod deque_ultra_final_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_small_deque_wrapped_stack_slices_and_heap_delegation() {
+        let mut d: SmallDeque<i32, 4> = SmallDeque::new();
+        d.push_back(1);
+        d.push_back(2);
+        d.push_back(3);
+        d.pop_front();
+        d.pop_front();
+        d.push_back(4);
+        d.push_back(5);
+        d.push_back(6); // should be wrapped on stack now
+
+        let (s1, s2) = d.as_slices();
+        assert!(!s1.is_empty() && !s2.is_empty());
+
+        let (m1, m2) = d.as_mut_slices();
+        assert!(!m1.is_empty() && !m2.is_empty());
+
+        // heap delegators
+        d.push_back(7); // spill
+        assert_eq!(d.front(), Some(&3));
+        assert_eq!(d.back(), Some(&7));
+        *d.front_mut().unwrap() = 30;
+        *d.back_mut().unwrap() = 70;
+        assert_eq!(d.pop_front(), Some(30));
+        assert_eq!(d.pop_back(), Some(70));
     }
 }
