@@ -287,6 +287,7 @@ where
         }
     }
 
+    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,

@@ -380,4 +380,21 @@ mod tests {
         let std_set: std::collections::BTreeSet<i32> = vec![1, 2].into_iter().collect();
         assert_eq!(set1, std_set);
     }
+
+    #[test]
+    fn test_btree_set_coverage_gaps() {
+        // Default
+        let set: SmallBTreeSet<i32, 4> = Default::default();
+        assert!(set.is_empty());
+
+        // PartialEq differing lengths
+        let set1: SmallBTreeSet<i32, 4> = vec![1, 2].into_iter().collect();
+        let set2: SmallBTreeSet<i32, 4> = vec![1].into_iter().collect();
+        assert_ne!(set1, set2); // hits `if self.len() != other.len()`
+
+        // Ord cmp
+        use std::cmp::Ordering;
+        assert_eq!(set1.cmp(&set1), Ordering::Equal);
+        assert_eq!(set1.cmp(&set2), Ordering::Greater);
+    }
 }

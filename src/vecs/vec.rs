@@ -115,26 +115,32 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Returns `true` if the vector is currently storing data on the stack.
     #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    /// Returns the number of elements in the vector.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if the vector contains no elements.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Returns the total capacity of the vector.
+    /// If on the stack, this is `N`. If on the heap, it is the allocated capacity of the underlying `Vec`.
     #[inline(always)]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
+    /// Returns a reference to the element at the given index, or `None` if out of bounds.
     #[inline(always)]
     pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.len {
@@ -151,6 +157,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Returns a mutable reference to the element at the given index, or `None` if out of bounds.
     #[inline(always)]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index < self.len {
@@ -167,6 +174,9 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Reserves capacity for at least `additional` more elements to be inserted in the given `SmallVec`.
+    /// The collection may reserve more space to avoid frequent reallocations.
+    /// If the required capacity exceeds the stack limit `N`, this triggers a transparent spill to the heap.
     pub fn reserve(&mut self, additional: usize) {
         if self.len + additional > self.capacity {
             unsafe {
@@ -179,6 +189,9 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Appends an element to the back of a collection.
+    ///
+    /// If the stack capacity `N` is exceeded, this triggers a transparent spill to the heap.
     #[inline(always)]
     pub fn push(&mut self, item: T) {
         if self.len < self.capacity {
@@ -199,6 +212,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Internal method to handle pushing when the stack is full.
     #[inline(never)]
     fn grow_and_push(&mut self, item: T) {
         unsafe {
@@ -211,6 +225,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Removes the last element from a vector and returns it, or `None` if it is empty.
     #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
@@ -232,6 +247,10 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Inserts an element at position `index` within the vector, shifting all elements after it to the right.
+    ///
+    /// # Panics
+    /// Panics if `index > len`.
     pub fn insert(&mut self, index: usize, element: T) {
         assert!(index <= self.len);
         if self.len == self.capacity {
@@ -253,6 +272,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Internal method to handle insertion when the stack is full.
     #[inline(never)]
     fn grow_for_insert(&mut self, index: usize, element: T) {
         unsafe {
@@ -265,6 +285,10 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Removes and returns the element at position `index` within the vector, shifting all elements after it to the left.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of bounds.
     pub fn remove(&mut self, index: usize) -> T {
         assert!(index < self.len);
         unsafe {
@@ -283,6 +307,13 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Removes an element from the vector and returns it.
+    ///
+    /// The removed element is replaced by the last element of the vector.
+    /// This does not preserve ordering, but is `O(1)`.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of bounds.
     pub fn swap_remove(&mut self, index: usize) -> T {
         assert!(index < self.len);
         unsafe {
@@ -304,6 +335,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Shortens the vector, keeping the first `len` elements and dropping the rest.
     pub fn truncate(&mut self, len: usize) {
         if len < self.len {
             unsafe {
@@ -323,10 +355,15 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
+    /// Clears the vector, removing all values.
     pub fn clear(&mut self) {
         self.truncate(0);
     }
 
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// In other words, remove all elements `e` such that `f(&e)` returns `false`.
+    /// This method operates in place, visiting each element exactly once in the original order.
     pub fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&T) -> bool,

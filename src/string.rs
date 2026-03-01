@@ -147,6 +147,7 @@ impl<const N: usize> SmallString<N> {
         str
     }
 
+    /// Returns `true` if the string is currently storing data on the stack.
     #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
@@ -154,6 +155,9 @@ impl<const N: usize> SmallString<N> {
 
     // --- Core Operations ---
 
+    /// Appends the given `char` to the end of this `SmallString`.
+    ///
+    /// If the stack capacity `N` is exceeded, this triggers a transparent spill to the heap.
     #[inline(always)]
     pub fn push(&mut self, ch: char) {
         unsafe {
@@ -180,6 +184,9 @@ impl<const N: usize> SmallString<N> {
         }
     }
 
+    /// Appends a given string slice onto the end of this `SmallString`.
+    ///
+    /// If the stack capacity `N` is exceeded, this triggers a transparent spill to the heap.
     #[inline(always)]
     pub fn push_str(&mut self, s: &str) {
         unsafe {
@@ -203,6 +210,7 @@ impl<const N: usize> SmallString<N> {
         }
     }
 
+    /// Returns the length of this `SmallString`, in bytes, not [`char`]s or graphemes.
     #[inline(always)]
     pub fn len(&self) -> usize {
         // We can use the Deref trait here for simplicity,
@@ -216,11 +224,16 @@ impl<const N: usize> SmallString<N> {
         }
     }
 
+    /// Returns `true` if this `SmallString` has a length of zero, and `false` otherwise.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Truncates this `SmallString`, removing all contents.
+    ///
+    /// While this means the `SmallString` will have a length of zero, it does not
+    /// touch its capacity.
     #[inline(always)]
     pub fn clear(&mut self) {
         unsafe {

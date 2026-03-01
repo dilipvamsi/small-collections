@@ -12,6 +12,38 @@ use crate::AnyLruCache;
 use crate::IndexType;
 
 /// A **stack-allocated LRU cache** using binary search for $O(\log N)$ lookups.
+///
+/// # Architecture & Pseudocode
+/// This cache avoids the overhead of hashing by maintaining a sorted array of
+/// physical slot indices based on key comparison. It uses a **Struct-of-Arrays (SoA)**
+/// layout combined with an intrusive doubly-linked list and a free list.
+///
+/// - `sorted_indices`: A `heapless::Vec<I, N>` maintaining indices `idx` sorted by `keys[idx]`.
+/// - `keys`, `values`: Storage slots for the actual data (`MaybeUninit`).
+/// - `prevs`, `nexts`: Parallel arrays representing the doubly-linked list of LRU order.
+///   The `nexts` array also doubles as the singly-linked free list for available slots.
+/// - `head`, `tail`: Pointers to the Most Recently Used (MRU) and Least Recently Used (LRU) slots.
+/// - `free_head`: Pointer to the first available empty slot.
+///
+/// ## Put Algorithm
+/// ```text
+/// 1. Binary search `sorted_indices` for the key.
+/// 2. If found at `pos`:
+///    a. Let `idx = sorted_indices[pos]`.
+///    b. Update `values[idx]`.
+///    c. Promote `idx` to `head` (MRU).
+/// 3. Else (new key, missing at `err_pos`):
+///    a. If cache is logically full (`len >= cap`), call `pop_lru_internal()`:
+///       i.   Read `idx = tail`.
+///       ii.  Binary search for `keys[idx]` in `sorted_indices` and remove it.
+///       iii. Detach `idx` from LRU list, push to `free_head`.
+///       iv.  Re-run binary search for the *new* key to update `err_pos` (since removal shifts items).
+///    b. If `len == N` (absolute stack capacity), return Err (triggers heap spill in wrapper).
+///    c. Pop `idx` from `free_head`.
+///    d. Write `key` to `keys[idx]` and `value` to `values[idx]`.
+///    e. Insert `idx` into `sorted_indices` at `err_pos`.
+///    f. Attach `idx` to `head` (MRU).
+/// ```
 pub struct HeaplessBTreeLruCache<K, V, const N: usize, I: IndexType = u8> {
     pub keys: [MaybeUninit<K>; N],
     pub values: [MaybeUninit<V>; N],

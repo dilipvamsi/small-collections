@@ -795,4 +795,18 @@ mod tests {
         assert!(any.contains(&1));
         assert!(!any.is_empty());
     }
+
+    #[test]
+    fn test_set_coverage_gaps() {
+        // Default
+        let set: SmallSet<i32, 4> = Default::default();
+        assert!(set.is_empty());
+
+        // Extend with references
+        let mut set: SmallSet<i32, 4> = SmallSet::new();
+        let refs = vec![1, 2, 3];
+        set.extend(&refs);
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(&2));
+    }
 }

@@ -15,53 +15,73 @@ use crate::IndexType;
 
 /// An object-safe abstraction over LRU cache types.
 pub trait AnyLruCache<K, V> {
+    /// Returns the number of key-value pairs that are currently on this backend.
     fn len(&self) -> usize;
+    /// Returns true if the cache is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Returns the logical maximum capacity of this cache backend.
     fn cap(&self) -> NonZeroUsize;
+    /// Inserts a key-value pair, updating the value if the key already exists.
+    /// Returns the old value if the key was present.
     fn put(&mut self, key: K, value: V) -> Option<V>;
+    /// Inserts a key-value pair with a specific maximum capacity enforcement.
+    /// Returns `(old_value, Result<(), (key, value)>)`. The result is an error if capacity is reached and the backend cannot grow.
     fn put_with_cap(
         &mut self,
         key: K,
         value: V,
         cap: NonZeroUsize,
     ) -> (Option<V>, Result<(), (K, V)>);
+    /// Returns a reference to the value corresponding to the key, moving it to the MRU position.
     fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Returns a mutable reference to the value corresponding to the key, moving it to the MRU position.
     fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Returns a reference to the value corresponding to the key without updating the LRU state.
     fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Clears the cache, removing all values.
     fn clear(&mut self);
+    /// Removes and returns the explicitly Least Recently Used key-value pair.
     fn pop_lru(&mut self) -> Option<(K, V)>;
+    /// Checks if the cache contains the given key.
     fn contains<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Pushes a key-value pair into the cache. If the key already exists, updates the value.
+    /// If pushing causes the capacity to be exceeded, returns the evicted LRU entry.
     fn push(&mut self, key: K, value: V) -> Option<(K, V)>;
+    /// Removes the given key from the cache and returns its associated value.
     fn pop<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Removes the given key from the cache and returns the (key, value) pair.
     fn pop_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Explicitly marks the given key as the Most Recently Used.
     fn promote<Q>(&mut self, key: &Q)
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Explicitly marks the given key as the Least Recently Used.
     fn demote<Q>(&mut self, key: &Q)
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized;
+    /// Returns a reference to the Least Recently Used pair without removing it.
     fn peek_lru(&self) -> Option<(&K, &V)>;
 }
 
@@ -199,16 +219,20 @@ where
     I: IndexType,
     S: AnyLruCache<K, V>,
 {
+    /// Returns the number of key-value pairs currently in the cache.
     pub fn len(&self) -> usize {
         self.num_entries
     }
+    /// Returns `true` if the cache is empty.
     pub fn is_empty(&self) -> bool {
         self.num_entries == 0
     }
+    /// Returns the maximum capacity of the cache.
     pub fn capacity(&self) -> NonZeroUsize {
         self.capacity
     }
 
+    /// Returns a reference to the value corresponding to the key, moving it to the MRU position.
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -221,6 +245,7 @@ where
         }
     }
 
+    /// Returns a mutable reference to the value corresponding to the key, moving it to the MRU position.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -233,6 +258,7 @@ where
         }
     }
 
+    /// Returns a reference to the value corresponding to the key without updating the LRU state.
     pub fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -245,6 +271,10 @@ where
         }
     }
 
+    /// Pushes a key-value pair into the cache. If the key already exists, updates the value and returns it.
+    ///
+    /// If the stack capacity `N` is exceeded during put, this will transparently allocate a `lru::LruCache`
+    /// and spill all elements to the heap.
     pub fn put(&mut self, key: K, value: V) -> Option<V> {
         if self.on_stack {
             let (old_v, res) =
@@ -265,6 +295,7 @@ where
         old
     }
 
+    /// Internal method to transition storage from stack to heap.
     fn spill_to_heap(&mut self) {
         if !self.on_stack {
             return;
@@ -280,6 +311,7 @@ where
         }
     }
 
+    /// Clears the cache, removing all key-value pairs.
     pub fn clear(&mut self) {
         if self.on_stack {
             unsafe { (*self.data.stack).clear() }
@@ -289,10 +321,12 @@ where
         self.num_entries = 0;
     }
 
+    /// Returns `true` if this cache is currently allocated entirely on the stack.
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    /// Returns `true` if the cache contains a value for the specified key.
     pub fn contains<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -305,6 +339,8 @@ where
         }
     }
 
+    /// Pushes a key-value pair into the cache. If the key already exists, updates the value.
+    /// If pushing causes the capacity to be exceeded, returns the evicted LRU pair.
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
         if self.on_stack {
             let res = unsafe { (*self.data.stack).push(key, value) };
@@ -317,6 +353,7 @@ where
         }
     }
 
+    /// Removes and returns the value corresponding to the key from the cache.
     pub fn pop<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -333,6 +370,7 @@ where
         res
     }
 
+    /// Removes and returns the key-value pair corresponding to the key from the cache.
     pub fn pop_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q>,
@@ -349,6 +387,7 @@ where
         res
     }
 
+    /// Removes and returns the Least Recently Used (LRU) key-value pair.
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         let res = if self.on_stack {
             unsafe { (*self.data.stack).pop_lru() }
@@ -361,6 +400,7 @@ where
         res
     }
 
+    /// Explictly promotes the corresponding key to the Most Recently Used (MRU) position.
     pub fn promote<Q>(&mut self, key: &Q)
     where
         K: Borrow<Q>,
@@ -373,6 +413,7 @@ where
         }
     }
 
+    /// Explicitly demotes the corresponding key to the Least Recently Used (LRU) position.
     pub fn demote<Q>(&mut self, key: &Q)
     where
         K: Borrow<Q>,
@@ -385,6 +426,7 @@ where
         }
     }
 
+    /// Returns references to the Least Recently Used (LRU) key-value pair without removing it.
     pub fn peek_lru(&self) -> Option<(&K, &V)> {
         if self.on_stack {
             unsafe { (*self.data.stack).peek_lru() }
@@ -393,6 +435,8 @@ where
         }
     }
 
+    /// Resizes the cache to a new maximum capacity.
+    /// If the new capacity exceeds the stack limit `N`, it transparently spills to the heap.
     pub fn resize(&mut self, cap: NonZeroUsize) {
         if self.on_stack {
             if cap.get() > N {

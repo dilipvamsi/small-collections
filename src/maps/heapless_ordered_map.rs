@@ -15,34 +15,33 @@ use heapless::LinearMap;
 
 /// A **stack-allocated**, insertion-order-preserving map backed by `heapless::LinearMap`.
 ///
-/// # Overview
-/// Entries are stored in the order they were first inserted.  Lookup, insertion, and
-/// removal all use a **linear scan** — O(N) — which is acceptable for small `N` (≤ 32)
-/// where the overhead of hashing or tree-rotation would dominate.
+/// # Architecture & Pseudocode
+/// This map stores elements linearly in the exact sequence they were added. It relies
+/// on a simple contiguous array layout under the hood, yielding O(N) operations.
 ///
-/// # Overflow protocol
-/// When the map is full and a *new* key is inserted, [`insert`](HeaplessOrderedMap::insert)
-/// returns `Err((key, value))` with the original key and value back.  The caller is
-/// expected to **spill** to a heap-backed `OrderMap` and retry the insert there.
+/// - `map`: A `heapless::LinearMap<K, V, N>`.
 ///
-/// # Generic parameters
-/// | Parameter | Meaning |
-/// |-----------|---------|
-/// | `K`       | Key type; must implement `Eq + Hash` (required by `LinearMap`) |
-/// | `V`       | Value type |
-/// | `N`       | Stack capacity (number of entries) |
+/// ## Insert Algorithm
+/// ```text
+/// 1. If map is physically full (`len == N`) AND the key is not already inside:
+///    a. Return `Err((key, value))` (triggers heap spill in `SmallOrderedMap`).
+/// 2. Else (capacity available or updating existing key):
+///    a. Let `old_val = map.insert(key, value)`.
+///    b. Return `Ok(old_val)`.
+/// ```
 ///
-/// # Design Considerations
-/// - **`Borrow<Q>` support**: `get`, `get_mut`, `remove`, and `contains_key` accept any
-///   borrowed form of the key (e.g. `&str` for `String` keys).  `heapless::LinearMap`
-///   only supports `K: PartialEq` lookups internally, so we implement linear scans
-///   ourselves using `<K as Borrow<Q>>::borrow`.
-/// - **`remove` rebuilds**: because `LinearMap` has no `remove_at` API, `remove` rebuilds
-///   the map by iterating and skipping the matching entry.  This is O(N) but allocation-
-///   free and preserves insertion order.
-/// - **`K: Eq + Hash` struct bound**: `heapless::LinearMap` requires these bounds at the
-///   struct level for its `Debug` and `Clone` derives, so they appear on the struct rather
-///   than only on `impl` blocks.
+/// ## Remove Algorithm (Order-Preserving)
+/// ```text
+/// 1. Initialize a temporary empty `LinearMap`.
+/// 2. Move the elements from the current map into `old_map` using `core::mem::replace`.
+/// 3. Iterate through `old_map` elements:
+///    a. If `element.key == target_key` (and we haven't removed it yet):
+///       i. Save `element.value` as the return value.
+///    b. Else:
+///       i. Insert `element` into the temporary map.
+/// 4. Replace `self.map` with the temporary map.
+/// 5. Return the saved `old_val`.
+/// ```
 #[derive(Debug, Clone)]
 pub struct HeaplessOrderedMap<K: Eq + Hash, V, const N: usize> {
     map: LinearMap<K, V, N>,

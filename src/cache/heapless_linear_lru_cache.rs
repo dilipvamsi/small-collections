@@ -11,6 +11,34 @@ use crate::AnyLruCache;
 use crate::IndexType;
 
 /// A **stack-allocated LRU cache** using linear search for $O(N)$ lookups.
+///
+/// # Architecture & Pseudocode
+/// This cache is highly optimized for tiny workloads ($N < 32$) where the overhead
+/// of hashing or binary searches outweighs a simple unstructured linear scan.
+/// It uses a **Struct-of-Arrays (SoA)** layout combined with an intrusive
+/// doubly-linked list and a free list.
+///
+/// - `keys`, `values`: Storage slots for the actual data (`MaybeUninit`).
+/// - `prevs`, `nexts`: Parallel arrays representing the doubly-linked list of LRU order.
+///   The `nexts` array also doubles as the singly-linked free list for available slots.
+/// - `head`, `tail`: Pointers to the Most Recently Used (MRU) and Least Recently Used (LRU) slots.
+/// - `free_head`: Pointer to the first available empty slot.
+///
+/// ## Put Algorithm
+/// ```text
+/// 1. Linearly scan the connected LRU list (following `nexts` from `head`) for the key.
+/// 2. If found at `idx`:
+///    a. Update `values[idx]`.
+///    b. Promote `idx` to `head` (MRU).
+/// 3. Else (new key):
+///    a. If cache is logically full (`len >= cap`), call `pop_lru_internal()`:
+///       i.  Read `idx = tail`.
+///       ii. Detach `idx` from LRU list, push to `free_head`.
+///    b. If `len == N` (absolute stack capacity), return Err (triggers heap spill in wrapper).
+///    c. Pop `idx` from `free_head`.
+///    d. Write `key` to `keys[idx]` and `value` to `values[idx]`.
+///    e. Attach `idx` to `head` (MRU).
+/// ```
 pub struct HeaplessLinearLruCache<K, V, const N: usize, I: IndexType = u8> {
     pub keys: [MaybeUninit<K>; N],
     pub values: [MaybeUninit<V>; N],

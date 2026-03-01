@@ -5,8 +5,8 @@
 //! the insertion-order-preserving semantics and the stack→heap spill protocol defined
 //! in [`ordered_map`](crate::ordered_map).
 
-use crate::SmallOrderedMap;
 use crate::AnySet;
+use crate::SmallOrderedMap;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -362,5 +362,17 @@ mod tests {
         let set: SmallOrderedSet<i32, 2> = vec![1, 2, 3].into_iter().collect();
         let set2: SmallOrderedSet<i32, 2> = vec![1, 2].into_iter().collect();
         assert_ne!(set, set2);
+    }
+
+    #[test]
+    fn test_ordered_set_coverage_gaps() {
+        let mut set: SmallOrderedSet<i32, 4> = vec![1, 2, 3, 4].into_iter().collect();
+
+        // Retain: keep evens
+        set.retain(|x| x % 2 == 0);
+
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&2));
+        assert!(set.contains(&4));
     }
 }

@@ -198,6 +198,7 @@ where
 {
     pub const MAX_STACK_SIZE: usize = 16 * 1024;
 
+    /// Creates a new empty map on the stack.
     pub fn new() -> Self {
         Self {
             on_stack: true,
@@ -208,6 +209,8 @@ where
         }
     }
 
+    /// Creates an empty map with the specified capacity.
+    /// If the capacity exceeds the stack limit `N`, it will be created directly on the heap.
     pub fn with_capacity(cap: usize) -> Self {
         if cap <= N {
             Self::new()
@@ -222,19 +225,23 @@ where
         }
     }
 
+    /// Returns `true` if the map is currently storing data on the stack.
     #[inline]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    /// Returns the number of elements in the map.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if the map contains no elements.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Clears the map, removing all key-value pairs.
     pub fn clear(&mut self) {
         unsafe {
             if self.on_stack {
@@ -246,6 +253,8 @@ where
         self.len = 0;
     }
 
+    /// Inserts a key-value pair into the map.
+    /// If the map is on the stack and full, this triggers a transparent spill to the heap.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         unsafe {
             if self.on_stack {
@@ -278,6 +287,7 @@ where
         }
     }
 
+    /// Returns a reference to the value corresponding to the key.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -292,6 +302,7 @@ where
         }
     }
 
+    /// Returns a mutable reference to the value corresponding to the key.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -306,6 +317,7 @@ where
         }
     }
 
+    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -328,6 +340,7 @@ where
         }
     }
 
+    /// Internal method to transition storage from stack (`HeaplessBTreeMap`) to heap (`BTreeMap`).
     #[inline(never)]
     unsafe fn spill_to_heap(&mut self) {
         unsafe {

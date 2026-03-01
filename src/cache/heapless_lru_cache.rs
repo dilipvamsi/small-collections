@@ -13,6 +13,34 @@ use heapless::IndexMap;
 use heapless::index_map::FnvIndexMap;
 
 /// A **stack-allocated LRU cache** with $O(1)$ performance.
+///
+/// # Architecture & Pseudocode
+/// This cache uses a **Struct-of-Arrays (SoA)** layout combined with an intrusive
+/// doubly-linked list and a free list, all residing entirely on the stack.
+///
+/// - `map`: A `heapless::IndexMap<K, I, N>` mapping keys to their physical slot indices.
+/// - `keys`, `values`: Storage slots for the actual data (`MaybeUninit` to avoid generic `Default` bounds).
+/// - `prevs`, `nexts`: Parallel arrays representing the doubly-linked list of LRU order.
+///   The `nexts` array also doubles as the singly-linked free list for available slots.
+/// - `head`, `tail`: Pointers to the Most Recently Used (MRU) and Least Recently Used (LRU) slots.
+/// - `free_head`: Pointer to the first available empty slot.
+///
+/// ## Put Algorithm
+/// ```text
+/// 1. If key exists in `map` at `idx`:
+///    a. Update `values[idx]`.
+///    b. Promote `idx` to `head` (MRU).
+/// 2. Else (new key):
+///    a. If cache is logically full (`len >= cap`), call `pop_lru_internal()`:
+///       i.  Read `idx = tail`.
+///       ii. Remove `keys[idx]` from `map`.
+///       iii. Detach `idx` from LRU list, push to `free_head`.
+///    b. If `len == N` (absolute stack capacity), return Err (triggers heap spill in wrapper).
+///    c. Pop `idx` from `free_head`.
+///    d. Write `key` to `keys[idx]` and `value` to `values[idx]`.
+///    e. Insert `key -> idx` into `map`.
+///    f. Attach `idx` to `head` (MRU).
+/// ```
 pub struct HeaplessLruCache<K, V, const N: usize, I: IndexType = u8> {
     pub map: FnvIndexMap<K, I, N>,
     pub keys: [MaybeUninit<K>; N],

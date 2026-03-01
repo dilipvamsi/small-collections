@@ -89,6 +89,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    /// Returns the number of bits in the vector.
     #[inline(always)]
     pub fn len(&self) -> usize {
         unsafe {
@@ -100,16 +101,21 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    /// Returns `true` if the vector contains no bits.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns `true` if the vector is currently storing data on the stack.
     #[inline(always)]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    /// Appends a bit to the back of the collection.
+    ///
+    /// If the stack capacity `N` is exceeded, this triggers a transparent spill to the heap.
     #[inline(always)]
     pub fn push(&mut self, value: bool) {
         unsafe {
@@ -127,6 +133,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    /// Removes the last bit from a vector and returns it, or `None` if it is empty.
     #[inline(always)]
     pub fn pop(&mut self) -> Option<bool> {
         unsafe {
@@ -138,6 +145,7 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    /// Returns the bit value at the given index, or `None` if out of bounds.
     #[inline(always)]
     pub fn get(&self, index: usize) -> Option<bool> {
         unsafe {
@@ -149,6 +157,10 @@ impl<const N: usize, O: BitOrder> SmallBitVec<N, O> {
         }
     }
 
+    /// Sets the bit value at the given index.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of bounds.
     #[inline(always)]
     pub fn set(&mut self, index: usize, value: bool) {
         unsafe {

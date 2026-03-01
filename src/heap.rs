@@ -180,11 +180,13 @@ where
 
     // --- Inspection ---
 
+    /// Returns `true` if the heap is currently storing data on the stack.
     #[inline]
     pub fn is_on_stack(&self) -> bool {
         self.on_stack
     }
 
+    /// Returns the number of elements in the heap.
     pub fn len(&self) -> usize {
         unsafe {
             if self.on_stack {
@@ -195,6 +197,7 @@ where
         }
     }
 
+    /// Returns `true` if the heap contains no elements.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -257,6 +260,9 @@ where
         }
     }
 
+    /// Pushes an item onto the binary heap.
+    ///
+    /// If the stack capacity `N` is exceeded, this triggers a transparent spill to the heap.
     pub fn push(&mut self, item: T) {
         unsafe {
             if self.on_stack {
@@ -273,6 +279,7 @@ where
         }
     }
 
+    /// Removes the greatest item from the binary heap and returns it, or `None` if it is empty.
     pub fn pop(&mut self) -> Option<T> {
         unsafe {
             if self.on_stack {
@@ -283,6 +290,7 @@ where
         }
     }
 
+    /// Drops all items from the binary heap.
     pub fn clear(&mut self) {
         unsafe {
             if self.on_stack {
