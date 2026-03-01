@@ -1,14 +1,22 @@
 [package]
 name = "small-collections"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
-description = "High-performance Map and Set that live on the stack and spill to the heap."
+description = "A collection of data structures optimized for small-buffer scenarios that reside on the stack and seamlessly spill to the heap."
+authors = ["Dilip Vamsi"]
 license = "MIT"
 repository = "https://github.com/dilipvamsi/small-collections"
 documentation = "https://docs.rs/small-collections"
 readme = "README.md"
-keywords = ["stack", "small-object-optimization", "no_std", "collections", "lru"]
+keywords = ["stack", "small-object-optimization", "no_std", "heapless", "lru"]
 categories = ["data-structures", "no-std", "memory-management"]
+rust-version = "1.85.0"
+exclude = [
+    ".github/*",
+    "Makefile",
+    "doc-rules.md",
+    "*.py"
+]
 
 [dependencies]
 # Fast hashing (consistent between stack and heap states)

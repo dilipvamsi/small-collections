@@ -19,7 +19,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-small-collections = "0.5.0"
+small-collections = "0.6.0"
 ```
 
 Then in your code:
@@ -347,6 +347,7 @@ Testing covers all critical paths, including:
 - **LRU Cache Parity**: Extensive tests ensure our heapless cache variants provide identical behavior and trait interoperability (`AnyLruCache`) to the standard `lru` crate.
 - **Object-Safe Traits**: Custom traits like `AnyMap`, `AnyVec`, and `AnyString` are heavily tested for seamless dispatch between stack-allocated arrays and heap-allocated structs.
 - **Edge Cases**: Out-of-bounds access, hash collisions, dynamic capacity reservations, and compile-time panic branches (`#[should_panic]`) are all thoroughly exercised.
+- **Memory Safety**: Extensively checked for memory leaks and undefined behavior via `Valgrind` and `Miri` pipelines natively included in the `Makefile`.
 
 You can verify the test suite and coverage locally using `cargo tarpaulin`:
 
